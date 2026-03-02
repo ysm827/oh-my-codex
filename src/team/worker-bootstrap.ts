@@ -57,6 +57,16 @@ You are a team worker in team "${teamName}". Your identity and assigned tasks ar
 12. Check your mailbox for messages at <team_state_root>/team/${teamName}/mailbox/{your-name}.json
 13. For team_* MCP tools, do not pass workingDirectory unless the lead explicitly tells you to
 
+## Message Protocol
+When calling team_send_message, you MUST always include:
+- from_worker: "<your-worker-name>" (your identity — check your inbox file for your worker name, never omit this)
+- to_worker: "leader-fixed" (to message the leader) or "worker-N" (for peers)
+
+Example:
+team_send_message({ team_name: "${teamName}", from_worker: "<your-worker-name>", to_worker: "leader-fixed", body: "Task completed" })
+
+CRITICAL: Never omit from_worker. The MCP server cannot auto-detect your identity.
+
 ## Rules
 - Do NOT edit files outside the paths listed in your task description
 - If you need to modify a shared file, report to the lead by writing to your status file with state "blocked"
@@ -241,6 +251,8 @@ export function generateInitialInbox(
   options: {
     teamStateRoot?: string;
     leaderCwd?: string;
+    workerRole?: string;
+    rolePromptContent?: string;
   } = {},
 ): string {
   const taskList = tasks
@@ -249,17 +261,25 @@ export function generateInitialInbox(
       if (t.blocked_by && t.blocked_by.length > 0) {
         entry += `\n  Blocked by: ${t.blocked_by.join(', ')}`;
       }
+      if (t.role) {
+        entry += `\n  Role: ${t.role}`;
+      }
       return entry;
     })
     .join('\n');
 
   const teamStateRoot = options.teamStateRoot || '<team_state_root>';
   const leaderCwd = options.leaderCwd || '<leader_cwd>';
+  const displayRole = options.workerRole ?? agentType;
+
+  const specializationSection = options.rolePromptContent
+    ? `\n## Your Specialization\n\nYou are operating as a **${displayRole}** agent. Follow these behavioral guidelines:\n\n${options.rolePromptContent}\n`
+    : '';
 
   return `# Worker Assignment: ${workerName}
 
 **Team:** ${teamName}
-**Role:** ${agentType}
+**Role:** ${displayRole}
 **Worker Name:** ${workerName}
 
 ## Your Assigned Tasks
@@ -282,6 +302,13 @@ ${taskList}
 11. Wait for the next instruction from the lead
 12. For team_* MCP tools, do not pass \`workingDirectory\` unless the lead explicitly asks (if resolution fails, use leader cwd: \`${leaderCwd}\`)
 
+## Message Protocol
+When using team_send_message MCP tool, ALWAYS include from_worker with YOUR worker name:
+- from_worker: "${workerName}"
+- to_worker: "leader-fixed" (for leader) or "worker-N" (for peers)
+
+Example: team_send_message({ team_name: "${teamName}", from_worker: "${workerName}", to_worker: "leader-fixed", body: "ACK: initialized" })
+
 ${buildVerificationSection('each assigned task')}
 
 ## Scope Rules
@@ -289,7 +316,7 @@ ${buildVerificationSection('each assigned task')}
 - Do NOT edit files that belong to other workers
 - If you need to modify a shared/common file, write \`{"state": "blocked", "reason": "need to edit shared file X"}\` to your status file and wait
 - Do NOT spawn sub-agents (no \`spawn_agent\`). Complete work in this worker session.
-`;
+${specializationSection}`;
 }
 
 /**

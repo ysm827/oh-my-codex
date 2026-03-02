@@ -7,6 +7,8 @@ import {
   pickActiveMode,
   evaluateInjectionGuards,
   buildSendKeysArgv,
+  buildPaneCurrentCommandArgv,
+  isPaneRunningShell,
 } from '../../../scripts/tmux-hook-engine.js';
 
 describe('normalizeTmuxHookConfig', () => {
@@ -215,6 +217,50 @@ describe('evaluateInjectionGuards', () => {
     });
     assert.equal(legacyCap.allow, false);
     assert.equal(legacyCap.reason, 'pane_cap_reached');
+  });
+});
+
+describe('buildPaneCurrentCommandArgv', () => {
+  it('builds argv to query pane_current_command', () => {
+    assert.deepEqual(
+      buildPaneCurrentCommandArgv('%5'),
+      ['display-message', '-p', '-t', '%5', '#{pane_current_command}'],
+    );
+  });
+});
+
+describe('isPaneRunningShell', () => {
+  it('detects common shells', () => {
+    assert.equal(isPaneRunningShell('zsh'), true);
+    assert.equal(isPaneRunningShell('bash'), true);
+    assert.equal(isPaneRunningShell('fish'), true);
+    assert.equal(isPaneRunningShell('sh'), true);
+    assert.equal(isPaneRunningShell('dash'), true);
+    assert.equal(isPaneRunningShell('ksh'), true);
+    assert.equal(isPaneRunningShell('login'), true);
+  });
+
+  it('detects shells with path prefix', () => {
+    assert.equal(isPaneRunningShell('/bin/zsh'), true);
+    assert.equal(isPaneRunningShell('/usr/bin/bash'), true);
+  });
+
+  it('detects login shells with leading dash', () => {
+    assert.equal(isPaneRunningShell('-zsh'), true);
+    assert.equal(isPaneRunningShell('-bash'), true);
+  });
+
+  it('returns false for agent processes', () => {
+    assert.equal(isPaneRunningShell('node'), false);
+    assert.equal(isPaneRunningShell('codex'), false);
+    assert.equal(isPaneRunningShell('claude'), false);
+    assert.equal(isPaneRunningShell('python'), false);
+  });
+
+  it('returns false for non-string or empty input', () => {
+    assert.equal(isPaneRunningShell(''), false);
+    assert.equal(isPaneRunningShell(null as any), false);
+    assert.equal(isPaneRunningShell(undefined as any), false);
   });
 });
 

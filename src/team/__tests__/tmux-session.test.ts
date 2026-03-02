@@ -1,6 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
+import { mkdtemp, readFile, rm, writeFile, chmod } from 'fs/promises';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import {
   buildClientAttachedReconcileHookName,
   assertTeamWorkerCliBinaryAvailable,
@@ -27,6 +30,7 @@ import {
   isWorkerAlive,
   killWorker,
   killWorkerByPaneId,
+  teardownWorkerPanes,
   listTeamSessions,
   resolveTeamWorkerCli,
   resolveTeamWorkerLaunchMode,
@@ -198,23 +202,23 @@ describe('HUD resize hook command builders', () => {
 });
 
 describe('sendToWorker validation', () => {
-  it('rejects text over 200 chars', () => {
-    assert.throws(
-      () => sendToWorker('omx-team-x', 1, 'a'.repeat(200)),
+  it('rejects text over 200 chars', async () => {
+    await assert.rejects(
+      sendToWorker('omx-team-x', 1, 'a'.repeat(200)),
       /< 200/i
     );
   });
 
-  it('rejects empty/whitespace text', () => {
-    assert.throws(
-      () => sendToWorker('omx-team-x', 1, '   '),
+  it('rejects empty/whitespace text', async () => {
+    await assert.rejects(
+      sendToWorker('omx-team-x', 1, '   '),
       /non-empty/i
     );
   });
 
-  it('rejects injection marker', () => {
-    assert.throws(
-      () => sendToWorker('omx-team-x', 1, `hello [OMX_TMUX_INJECT]`),
+  it('rejects injection marker', async () => {
+    await assert.rejects(
+      sendToWorker('omx-team-x', 1, `hello [OMX_TMUX_INJECT]`),
       /marker/i
     );
   });
@@ -1301,5 +1305,87 @@ describe('killWorker leader pane guard', () => {
     withEmptyPath(() => {
       assert.doesNotThrow(() => killWorker('omx-team-x:0', 1, '%5'));
     });
+  });
+});
+
+describe('teardownWorkerPanes shared primitive', () => {
+  it('excludes leader and hud panes in shared pane-kill primitive', async () => {
+    const fakeBinDir = await mkdtemp(join(tmpdir(), 'omx-tmux-teardown-'));
+    const logPath = join(fakeBinDir, 'tmux.log');
+    const tmuxStubPath = join(fakeBinDir, 'tmux');
+    const previousPath = process.env.PATH;
+    try {
+      await writeFile(
+        tmuxStubPath,
+        `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "${logPath}"
+exit 0
+`,
+      );
+      await chmod(tmuxStubPath, 0o755);
+      process.env.PATH = `${fakeBinDir}:${previousPath ?? ''}`;
+
+      const summary = await teardownWorkerPanes(['%1', '%2', '%3'], {
+        leaderPaneId: '%1',
+        hudPaneId: '%2',
+        graceMs: 1,
+      });
+
+      assert.equal(summary.excluded.leader, 1);
+      assert.equal(summary.excluded.hud, 1);
+      assert.equal(summary.kill.attempted, 1);
+      assert.equal(summary.kill.succeeded, 1);
+      const log = await readFile(logPath, 'utf-8');
+      assert.match(log, /kill-pane -t %3/);
+      assert.doesNotMatch(log, /kill-pane -t %1/);
+      assert.doesNotMatch(log, /kill-pane -t %2/);
+    } finally {
+      if (typeof previousPath === 'string') process.env.PATH = previousPath;
+      else delete process.env.PATH;
+      await rm(fakeBinDir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses pane-id-direct kill semantics without liveness-gated helper calls', async () => {
+    const source = await readFile(new URL('../tmux-session.js', import.meta.url), 'utf-8');
+    const primitiveBlock = source.split('export async function teardownWorkerPanes')[1] ?? '';
+    assert.equal(primitiveBlock.includes('isWorkerAlive'), false);
+    assert.equal(primitiveBlock.includes('killWorker('), false);
+  });
+
+  it('continues best-effort when a pane target is missing', async () => {
+    const fakeBinDir = await mkdtemp(join(tmpdir(), 'omx-tmux-teardown-missing-'));
+    const logPath = join(fakeBinDir, 'tmux.log');
+    const tmuxStubPath = join(fakeBinDir, 'tmux');
+    const previousPath = process.env.PATH;
+    try {
+      await writeFile(
+        tmuxStubPath,
+        `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "${logPath}"
+if [ "$1" = "kill-pane" ] && [ "\${3:-}" = "%404" ]; then
+  echo "missing pane" >&2
+  exit 1
+fi
+exit 0
+`,
+      );
+      await chmod(tmuxStubPath, 0o755);
+      process.env.PATH = `${fakeBinDir}:${previousPath ?? ''}`;
+
+      const summary = await teardownWorkerPanes(['%404', '%405'], { graceMs: 1 });
+      assert.equal(summary.kill.attempted, 2);
+      assert.equal(summary.kill.succeeded, 1);
+      assert.equal(summary.kill.failed, 1);
+      const log = await readFile(logPath, 'utf-8');
+      assert.match(log, /kill-pane -t %404/);
+      assert.match(log, /kill-pane -t %405/);
+    } finally {
+      if (typeof previousPath === 'string') process.env.PATH = previousPath;
+      else delete process.env.PATH;
+      await rm(fakeBinDir, { recursive: true, force: true });
+    }
   });
 });

@@ -152,7 +152,7 @@ rm -f ~/.codex/hooks/stop-continuation.sh
 
 ### Fix: Outdated Plugin
 ```bash
-rm -rf ~/.codex/plugins/cache/oh-my-codex
+rm -rf ~/.codex/plugins/cache/omc/oh-my-codex
 echo "Plugin cache cleared. Restart Codex CLI to fetch latest version."
 ```
 

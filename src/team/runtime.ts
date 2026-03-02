@@ -16,12 +16,12 @@ import {
   dismissTrustPromptIfPresent,
   sleepFractionalSeconds,
   sendToWorker,
+  sendToLeaderPane,
   sendToWorkerStdin,
-  notifyLeaderStatus,
   isWorkerAlive,
   getWorkerPanePid,
-  killWorker,
-  killWorkerByPaneId,
+  killWorkerByPaneIdAsync,
+  teardownWorkerPanes,
   unregisterResizeHook,
   destroyTeamSession,
   listTeamSessions,
@@ -44,6 +44,7 @@ import {
   teamAppendEvent as appendTeamEvent,
   teamReadTaskApproval as readTaskApproval,
   teamListMailbox as listMailboxMessages,
+  teamMarkMessageDelivered as markMessageDelivered,
   teamMarkMessageNotified as markMessageNotified,
   teamEnqueueDispatchRequest as enqueueDispatchRequest,
   teamMarkDispatchRequestNotified as markDispatchRequestNotified,
@@ -83,6 +84,8 @@ import {
   generateTriggerMessage,
   generateMailboxTriggerMessage,
 } from './worker-bootstrap.js';
+import { loadRolePrompt } from './role-router.js';
+import { codexPromptsDir } from '../utils/paths.js';
 import { type TeamPhase, type TerminalPhase } from './orchestrator.js';
 import {
   isLowComplexityAgentType,
@@ -148,10 +151,14 @@ export interface TeamRuntime {
 
 interface ShutdownOptions {
   force?: boolean;
+  /** When true, applies ralph-specific cleanup policy: no force-kill on failure, detailed audit logging. */
+  ralph?: boolean;
 }
 
 export interface TeamStartOptions {
   worktreeMode?: WorktreeMode;
+  /** When true, applies ralph-specific cleanup policy during startup rollback (skip branch deletion). */
+  ralph?: boolean;
 }
 
 interface ShutdownGateCounts {
@@ -665,11 +672,26 @@ export async function startTeam(
       // Get tasks assigned to this worker
       const workerTasks = allTasks.filter(t => t.owner === workerName);
 
+      // Resolve per-worker role from assigned task roles
+      const taskRoles = workerTasks.map(t => t.role).filter(Boolean) as string[];
+      const uniqueTaskRoles = new Set(taskRoles);
+      const workerRole = taskRoles.length > 0 && uniqueTaskRoles.size === 1
+        ? taskRoles[0]
+        : agentType;
+      if (uniqueTaskRoles.size > 1) {
+        console.log(`[omx:team] ${workerName}: mixed task roles [${[...uniqueTaskRoles].join(', ')}], falling back to ${agentType}`);
+      }
+
+      // Load role-specific prompt content if role differs from default
+      const rolePromptContent = workerRole !== agentType
+        ? await loadRolePrompt(workerRole, codexPromptsDir())
+        : null;
+
       // Write worker identity
       const identity: WorkerInfo = {
         name: workerName,
         index: i,
-        role: agentType,
+        role: workerRole,
         worker_cli: workerCliPlan[i - 1],
         assigned_tasks: workerTasks.map(t => t.id),
         working_dir: workerWorkspace.cwd,
@@ -713,6 +735,8 @@ export async function startTeam(
       const inbox = generateInitialInbox(workerName, sanitized, agentType, workerTasks, {
         teamStateRoot,
         leaderCwd,
+        workerRole,
+        rolePromptContent: rolePromptContent ?? undefined,
       });
       const trigger = generateTriggerMessage(workerName, sanitized);
       const maxStartupDispatchRetries = 3;
@@ -786,10 +810,10 @@ export async function startTeam(
       // In split-pane topology, we must not kill the entire tmux session; kill only created panes.
       if (sessionName.includes(':')) {
         for (const paneId of createdWorkerPaneIds) {
-          try { killWorkerByPaneId(paneId, createdLeaderPaneId); } catch { /* ignore */ }
+          try { await killWorkerByPaneIdAsync(paneId, createdLeaderPaneId); } catch { /* ignore */ }
         }
         if (config?.hud_pane_id) {
-          try { killWorkerByPaneId(config.hud_pane_id, createdLeaderPaneId); } catch { /* ignore */ }
+          try { await killWorkerByPaneIdAsync(config.hud_pane_id, createdLeaderPaneId); } catch { /* ignore */ }
         }
       } else {
         try {
@@ -834,7 +858,9 @@ export async function startTeam(
     }
     if (provisionedWorktrees.length > 0) {
       try {
-        await rollbackProvisionedWorktrees(provisionedWorktrees);
+        await rollbackProvisionedWorktrees(provisionedWorktrees, {
+          skipBranchDeletion: options.ralph === true,
+        });
       } catch (cleanupError) {
         rollbackErrors.push(`rollbackProvisionedWorktrees: ${String(cleanupError)}`);
       }
@@ -976,6 +1002,21 @@ export async function monitorTeam(teamName: string, cwd: string): Promise<TeamSn
     cwd
   );
   const mailboxDeliveryMs = performance.now() - mailboxDeliveryStartMs;
+
+  // Prune ephemeral status messages from leader mailbox (TTL: 60s)
+  try {
+    const leaderMailbox = await listMailboxMessages(sanitized, 'leader-fixed', cwd);
+    const now = Date.now();
+    for (const msg of leaderMailbox) {
+      if (msg.from_worker === 'system' && msg.created_at) {
+        const age = now - new Date(msg.created_at).getTime();
+        if (age > 60_000) {
+          await markMessageDelivered(sanitized, 'leader-fixed', msg.message_id, cwd);
+        }
+      }
+    }
+  } catch { /* best-effort */ }
+
   const updatedAt = new Date().toISOString();
   const totalMs = performance.now() - monitorStartMs;
   await writeMonitorSnapshot(
@@ -1083,7 +1124,7 @@ export async function assignTask(
         if (dismissTrustPromptIfPresent(config.tmux_session, workerInfo.index, workerInfo.pane_id)) {
           waitForWorkerReady(config.tmux_session, workerInfo.index, 15_000, workerInfo.pane_id);
         } else {
-          sleepFractionalSeconds(assignRetryDelayS);
+          await new Promise<void>(r => setTimeout(r, assignRetryDelayS * 1000));
         }
       }
     }
@@ -1136,6 +1177,7 @@ export async function reassignTask(
  */
 export async function shutdownTeam(teamName: string, cwd: string, options: ShutdownOptions = {}): Promise<void> {
   const force = options.force === true;
+  const ralph = options.ralph === true;
   const sanitized = sanitizeTeamName(teamName);
   const config = await readTeamConfig(sanitized, cwd);
   if (!config) {
@@ -1164,15 +1206,30 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
       {
         type: 'shutdown_gate',
         worker: 'leader-fixed',
-        reason: `allowed=${gate.allowed} total=${gate.total} pending=${gate.pending} blocked=${gate.blocked} in_progress=${gate.in_progress} completed=${gate.completed} failed=${gate.failed}`,
+        reason: `allowed=${gate.allowed} total=${gate.total} pending=${gate.pending} blocked=${gate.blocked} in_progress=${gate.in_progress} completed=${gate.completed} failed=${gate.failed}${ralph ? ' policy=ralph' : ''}`,
       },
       cwd,
     ).catch(() => {});
 
     if (!gate.allowed) {
-      throw new Error(
-        `shutdown_gate_blocked:pending=${gate.pending},blocked=${gate.blocked},in_progress=${gate.in_progress},failed=${gate.failed}`,
-      );
+      const hasActiveWork = gate.pending > 0 || gate.blocked > 0 || gate.in_progress > 0;
+      if (ralph && !hasActiveWork) {
+        // Ralph policy: bypass on failure-only scenarios (no pending/blocked/in_progress tasks).
+        // This allows the ralph loop to retry rather than leaving stale team state.
+        await appendTeamEvent(
+          sanitized,
+          {
+            type: 'ralph_cleanup_policy',
+            worker: 'leader-fixed',
+            reason: `gate_bypassed:pending=${gate.pending},blocked=${gate.blocked},in_progress=${gate.in_progress},failed=${gate.failed}`,
+          },
+          cwd,
+        ).catch(() => {});
+      } else {
+        throw new Error(
+          `shutdown_gate_blocked:pending=${gate.pending},blocked=${gate.blocked},in_progress=${gate.in_progress},failed=${gate.failed}`,
+        );
+      }
     }
   }
 
@@ -1278,16 +1335,13 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
     if (resizeHookWarning) {
       console.warn(`[team shutdown] ${sanitized}: ${resizeHookWarning}; continuing teardown`);
     }
-    for (const w of config.workers) {
-      try {
-        // Guard: never kill the leader's own pane or the HUD pane.
-        if (leaderPaneId && w.pane_id === leaderPaneId) continue;
-        if (hudPaneId && w.pane_id === hudPaneId) continue;
-        if (isWorkerAlive(sessionName, w.index, w.pane_id)) {
-          killWorker(sessionName, w.index, w.pane_id, leaderPaneId ?? undefined);
-        }
-      } catch { /* ignore */ }
-    }
+    const workerPaneIds = config.workers
+      .map((w) => w.pane_id)
+      .filter((paneId): paneId is string => typeof paneId === 'string' && paneId.trim().length > 0);
+    await teardownWorkerPanes(workerPaneIds, {
+      leaderPaneId,
+      hudPaneId,
+    });
 
     // 4. Destroy tmux session
     if (!sessionName.includes(':')) {
@@ -1316,7 +1370,24 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
   try { await removeTeamWorkerInstructionsFile(sanitized, cwd); } catch { /* ignore */ }
   restoreTeamModelInstructionsFile(sanitized);
 
-  // 6. Cleanup state
+  // 6. Ralph stricter completion logging
+  if (ralph) {
+    const finalTasks = await listTasks(sanitized, cwd).catch(() => [] as Awaited<ReturnType<typeof listTasks>>);
+    const completed = finalTasks.filter((t) => t.status === 'completed').length;
+    const failed = finalTasks.filter((t) => t.status === 'failed').length;
+    const pending = finalTasks.filter((t) => t.status === 'pending').length;
+    await appendTeamEvent(
+      sanitized,
+      {
+        type: 'ralph_cleanup_summary',
+        worker: 'leader-fixed',
+        reason: `total=${finalTasks.length} completed=${completed} failed=${failed} pending=${pending} force=${force}`,
+      },
+      cwd,
+    ).catch(() => {});
+  }
+
+  // 7. Cleanup state
   await cleanupTeamState(sanitized, cwd);
 }
 
@@ -1485,7 +1556,7 @@ async function emitMonitorDerivedEvents(
   }
 }
 
-function notifyWorkerOutcome(config: TeamConfig, workerIndex: number, message: string, workerPaneId?: string): DispatchOutcome {
+async function notifyWorkerOutcome(config: TeamConfig, workerIndex: number, message: string, workerPaneId?: string): Promise<DispatchOutcome> {
   const worker = config.workers.find((candidate) => candidate.index === workerIndex);
   if (!worker) return { ok: false, transport: 'none', reason: 'worker_not_found' };
 
@@ -1508,7 +1579,7 @@ function notifyWorkerOutcome(config: TeamConfig, workerIndex: number, message: s
     return { ok: false, transport: 'tmux_send_keys', reason: 'tmux_unavailable' };
   }
   try {
-    sendToWorker(config.tmux_session, workerIndex, message, workerPaneId, worker.worker_cli);
+    await sendToWorker(config.tmux_session, workerIndex, message, workerPaneId, worker.worker_cli);
     return { ok: true, transport: 'tmux_send_keys', reason: 'tmux_send_keys_sent' };
   } catch (error) {
     return {
@@ -1599,7 +1670,7 @@ async function dispatchCriticalInboxInstruction(params: {
     return { ok: true, transport: 'hook', reason: `hook_receipt_${receipt.status}`, request_id: queued.request_id };
   }
   if (receipt?.status === 'failed') {
-    const fallback = notifyWorkerOutcome(config, workerIndex, triggerMessage, paneId);
+    const fallback = await notifyWorkerOutcome(config, workerIndex, triggerMessage, paneId);
     if (fallback.ok) {
       await transitionDispatchRequest(
         teamName,
@@ -1632,7 +1703,7 @@ async function dispatchCriticalInboxInstruction(params: {
     };
   }
 
-  const fallback = notifyWorkerOutcome(config, workerIndex, triggerMessage, paneId);
+  const fallback = await notifyWorkerOutcome(config, workerIndex, triggerMessage, paneId);
   if (fallback.ok) {
     const marked = await markDispatchRequestNotified(
       teamName,
@@ -1688,7 +1759,7 @@ async function finalizeHookPreferredMailboxDispatch(params: {
   config: TeamConfig;
   dispatchPolicy: TeamPolicy;
   cwd: string;
-  fallbackNotify?: () => DispatchOutcome;
+  fallbackNotify?: () => DispatchOutcome | Promise<DispatchOutcome>;
 }): Promise<DispatchOutcome> {
   const {
     teamName,
@@ -1713,9 +1784,9 @@ async function finalizeHookPreferredMailboxDispatch(params: {
   }
 
   const fallback: DispatchOutcome = fallbackNotify
-    ? fallbackNotify()
+    ? await fallbackNotify()
     : (typeof workerIndex === 'number'
-      ? notifyWorkerOutcome(config, workerIndex, triggerMessage, paneId)
+      ? await notifyWorkerOutcome(config, workerIndex, triggerMessage, paneId)
       : { ok: false, transport: 'none', reason: 'missing_worker_index' });
   if (receipt?.status === 'failed') {
     if (fallback.ok) {
@@ -1800,9 +1871,22 @@ async function finalizeHookPreferredMailboxDispatch(params: {
   };
 }
 
-function notifyLeader(config: TeamConfig, message: string): boolean {
+async function notifyLeaderAsync(config: TeamConfig, message: string, cwd: string): Promise<boolean> {
+  // Primary: inject directly into the leader pane via tmux send-keys.
+  // This is the fallback path when hook-based dispatch timed out, so the
+  // leader needs a direct tmux notification to wake up. Fixes #437.
+  if (config.leader_pane_id && isTmuxAvailable()) {
+    try {
+      await sendToLeaderPane(config.leader_pane_id, message);
+      return true;
+    } catch {
+      // Fall through to mailbox
+    }
+  }
+  // Fallback: write to leader mailbox (leader picks up on next hook cycle)
   if (!config.tmux_session) return false;
-  return notifyLeaderStatus(config.tmux_session, message);
+  const { notifyLeaderMailboxAsync } = await import('./tmux-session.js');
+  return notifyLeaderMailboxAsync(config.name, 'system', message, cwd);
 }
 
 async function deliverPendingMailboxMessages(
@@ -1879,7 +1963,7 @@ async function deliverPendingMailboxMessages(
           cwd,
         });
       } else {
-        const direct = notifyWorkerOutcome(config, workerInfo.index, triggerMessage, workerInfo.pane_id);
+        const direct = await notifyWorkerOutcome(config, workerInfo.index, triggerMessage, workerInfo.pane_id);
         outcome = { ...direct, request_id: queued.request.request_id, message_id: msg.message_id };
         if (outcome.ok) {
           await markMessageNotified(teamName, worker.name, msg.message_id, cwd).catch(() => false);
@@ -1932,10 +2016,10 @@ export async function sendWorkerMessage(
       cwd,
       transportPreference: leaderTransportPreference,
       fallbackAllowed: leaderTransportPreference === 'hook_preferred_with_fallback',
-      notify: (_target, message) => (
+      notify: async (_target, message) => (
         leaderTransportPreference === 'hook_preferred_with_fallback'
           ? { ok: true, transport: 'hook', reason: 'queued_for_hook_dispatch' }
-          : { ok: notifyLeader(config, message), transport: 'tmux_send_keys', reason: 'leader_notified' }
+          : { ok: await notifyLeaderAsync(config, message, cwd), transport: 'mailbox', reason: 'leader_mailbox_notified' }
       ),
     });
     let finalOutcome = outcome;
@@ -1954,10 +2038,10 @@ export async function sendWorkerMessage(
         config,
         dispatchPolicy,
         cwd,
-        fallbackNotify: () => ({
-          ok: notifyLeader(config, leaderTriggerMessage),
-          transport: 'tmux_send_keys',
-          reason: 'leader_notified',
+        fallbackNotify: async () => ({
+          ok: await notifyLeaderAsync(config, leaderTriggerMessage, cwd),
+          transport: 'mailbox' as const,
+          reason: 'leader_mailbox_notified',
         }),
       });
     }
@@ -1983,10 +2067,10 @@ export async function sendWorkerMessage(
     cwd,
     transportPreference,
     fallbackAllowed: transportPreference === 'hook_preferred_with_fallback',
-    notify: (_target, message) => (
+    notify: async (_target, message) => (
       transportPreference === 'hook_preferred_with_fallback'
         ? { ok: true, transport: 'hook', reason: 'queued_for_hook_dispatch' }
-        : notifyWorkerOutcome(config, recipient.index, message, recipient.pane_id)
+        : await notifyWorkerOutcome(config, recipient.index, message, recipient.pane_id)
     ),
   });
   let finalOutcome = outcome;
@@ -2034,11 +2118,11 @@ export async function broadcastWorkerMessage(
     triggerFor: (workerName) => generateMailboxTriggerMessage(workerName, sanitized, 1),
     transportPreference,
     fallbackAllowed: transportPreference === 'hook_preferred_with_fallback',
-    notify: (target, message) =>
+    notify: async (target, message) =>
       transportPreference === 'hook_preferred_with_fallback'
         ? { ok: true, transport: 'hook', reason: 'queued_for_hook_dispatch' }
         : (typeof target.workerIndex === 'number'
-        ? notifyWorkerOutcome(config, target.workerIndex, message, target.paneId)
+        ? await notifyWorkerOutcome(config, target.workerIndex, message, target.paneId)
         : { ok: false, transport: 'none', reason: 'missing_worker_index' }),
   });
   const finalizedOutcomes: DispatchOutcome[] = [];

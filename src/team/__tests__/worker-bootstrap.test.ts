@@ -203,6 +203,48 @@ describe('worker bootstrap', () => {
     assert.match(inbox, /Blocked by: 1, 2/);
   });
 
+  it('generateInitialInbox uses workerRole when provided', () => {
+    const tasks: TeamTask[] = [
+      { id: '1', subject: 'Test task', description: 'Write tests', status: 'pending', created_at: new Date().toISOString() },
+    ];
+    const inbox = generateInitialInbox('worker-1', 'team-role', 'executor', tasks, {
+      workerRole: 'test-engineer',
+    });
+    assert.match(inbox, /\*\*Role:\*\* test-engineer/);
+    assert.doesNotMatch(inbox, /\*\*Role:\*\* executor/);
+  });
+
+  it('generateInitialInbox includes specialization section when rolePromptContent provided', () => {
+    const tasks: TeamTask[] = [
+      { id: '1', subject: 'Design UI', description: 'Build component', status: 'pending', created_at: new Date().toISOString() },
+    ];
+    const inbox = generateInitialInbox('worker-2', 'team-spec', 'executor', tasks, {
+      workerRole: 'designer',
+      rolePromptContent: 'You focus on UI/UX design and component architecture.',
+    });
+    assert.match(inbox, /## Your Specialization/);
+    assert.match(inbox, /\*\*designer\*\* agent/);
+    assert.match(inbox, /UI\/UX design and component architecture/);
+  });
+
+  it('generateInitialInbox omits specialization section when no rolePromptContent', () => {
+    const tasks: TeamTask[] = [
+      { id: '1', subject: 'Task', description: 'Do work', status: 'pending', created_at: new Date().toISOString() },
+    ];
+    const inbox = generateInitialInbox('worker-1', 'team-no-spec', 'executor', tasks, {
+      workerRole: 'executor',
+    });
+    assert.doesNotMatch(inbox, /## Your Specialization/);
+  });
+
+  it('generateInitialInbox shows task role in task list', () => {
+    const tasks: TeamTask[] = [
+      { id: '1', subject: 'Test task', description: 'Write tests', status: 'pending', role: 'test-engineer', created_at: new Date().toISOString() },
+    ];
+    const inbox = generateInitialInbox('worker-1', 'team-task-role', 'executor', tasks);
+    assert.match(inbox, /Role: test-engineer/);
+  });
+
   it('generateTaskAssignmentInbox includes task ID and description', () => {
     const inbox = generateTaskAssignmentInbox('worker-3', 'team-followup', '42', 'Implement parser update');
 

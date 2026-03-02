@@ -75,6 +75,7 @@ export interface TeamTask {
   description: string;
   status: 'pending' | 'blocked' | 'in_progress' | 'completed' | 'failed';
   requires_code_change?: boolean;
+  role?: string; // agent role for this task (e.g., 'executor', 'test-engineer', 'designer')
   owner?: string; // worker name
   result?: string; // completion summary
   error?: string; // failure reason
@@ -201,6 +202,8 @@ export interface TeamEvent {
     | 'shutdown_ack'
     | 'shutdown_gate'
     | 'shutdown_gate_forced'
+    | 'ralph_cleanup_policy'
+    | 'ralph_cleanup_summary'
     | 'approval_decision'
     | 'team_leader_nudge';
   worker: string;

@@ -44,7 +44,7 @@ I'll figure out what to stop based on context.
 If you haven't configured OMX yet:
 
 ```
-/omc-setup
+/omx-setup
 ```
 
 This is the **only command** you need to know. It downloads the configuration and you're done.
@@ -134,7 +134,7 @@ Based on patterns found, output recommendations:
 - "Use security-reviewer after auth/API changes"
 
 **If defaultExecutionMode not set:**
-- "Set defaultExecutionMode in /omc-setup for consistent behavior"
+- "Set defaultExecutionMode in /omx-setup for consistent behavior"
 
 ### Step 4: Output Report
 
@@ -179,7 +179,7 @@ No token tracking found. To enable tracking:
 1. Ensure ~/.omx/state/ directory exists
 2. Run any OMX command to start tracking
 
-Tip: Run /omc-setup to configure OMX properly.
+Tip: Run /omx-setup to configure OMX properly.
 ```
 
 ## Need More Help?

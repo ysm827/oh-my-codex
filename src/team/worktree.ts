@@ -1,6 +1,9 @@
-import { execFileSync, spawnSync } from 'child_process';
+import { execFile as execFileCb, execFileSync, spawnSync } from 'child_process';
 import { existsSync, mkdirSync } from 'fs';
 import { basename, dirname, join, resolve } from 'path';
+import { promisify } from 'util';
+
+const execFilePromise = promisify(execFileCb);
 
 export type WorktreeMode =
   | { enabled: false }
@@ -316,7 +319,15 @@ export function ensureWorktree(plan: PlannedWorktreeTarget | { enabled: false })
   };
 }
 
-export function rollbackProvisionedWorktrees(results: Array<EnsureWorktreeResult | { enabled: false }>): void {
+export interface RollbackWorktreeOptions {
+  /** When true, skip `git branch -D` for branches created during provisioning (ralph policy). */
+  skipBranchDeletion?: boolean;
+}
+
+export async function rollbackProvisionedWorktrees(
+  results: Array<EnsureWorktreeResult | { enabled: false }>,
+  options: RollbackWorktreeOptions = {},
+): Promise<void> {
   const created = results
     .filter((result): result is EnsureWorktreeResult => result.enabled === true && result.created)
     .reverse();
@@ -324,31 +335,36 @@ export function rollbackProvisionedWorktrees(results: Array<EnsureWorktreeResult
   const errors: string[] = [];
 
   for (const result of created) {
-    const removeResult = spawnSync('git', ['worktree', 'remove', '--force', result.worktreePath], {
-      cwd: result.repoRoot,
-      encoding: 'utf-8',
-    });
-
-    if (removeResult.status !== 0) {
-      const stderr = (removeResult.stderr || '').trim();
-      errors.push(`remove:${result.worktreePath}:${stderr || `exit_${removeResult.status}`}`);
+    try {
+      await execFilePromise('git', ['worktree', 'remove', '--force', result.worktreePath], {
+        cwd: result.repoRoot,
+        encoding: 'utf-8',
+      });
+    } catch (err: unknown) {
+      const stderr = ((err as Record<string, unknown>).stderr as string ?? '').trim();
+      const exitCode = (err as Record<string, unknown>).code;
+      errors.push(`remove:${result.worktreePath}:${stderr || `exit_${exitCode}`}`);
       continue;
     }
 
+    if (options.skipBranchDeletion) continue;
     if (!result.createdBranch || !result.branchName) continue;
 
     const entriesAfterRemove = listWorktrees(result.repoRoot);
     const stillCheckedOut = hasBranchInUse(entriesAfterRemove, result.branchName, result.worktreePath);
     if (stillCheckedOut) continue;
 
-    const deleteBranchResult = spawnSync('git', ['branch', '-D', result.branchName], {
-      cwd: result.repoRoot,
-      encoding: 'utf-8',
-    });
-
-    if (deleteBranchResult.status !== 0 && branchExists(result.repoRoot, result.branchName)) {
-      const stderr = (deleteBranchResult.stderr || '').trim();
-      errors.push(`delete_branch:${result.branchName}:${stderr || `exit_${deleteBranchResult.status}`}`);
+    try {
+      await execFilePromise('git', ['branch', '-D', result.branchName], {
+        cwd: result.repoRoot,
+        encoding: 'utf-8',
+      });
+    } catch (err: unknown) {
+      if (branchExists(result.repoRoot, result.branchName)) {
+        const stderr = ((err as Record<string, unknown>).stderr as string ?? '').trim();
+        const exitCode = (err as Record<string, unknown>).code;
+        errors.push(`delete_branch:${result.branchName}:${stderr || `exit_${exitCode}`}`);
+      }
     }
   }
 

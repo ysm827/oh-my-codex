@@ -24,7 +24,12 @@ export function getCurrentTmuxSession(): string | null {
   // Fast path: $TMUX is set (we're directly inside tmux)
   if (process.env.TMUX) {
     try {
-      const sessionName = execSync("tmux display-message -p '#S'", {
+      const tmuxPaneTarget = process.env.TMUX_PANE;
+      const paneTargetSafe = tmuxPaneTarget && TMUX_PANE_TARGET_RE.test(tmuxPaneTarget) ? tmuxPaneTarget : null;
+      const displayCmd = paneTargetSafe
+        ? `tmux display-message -p -t ${paneTargetSafe} '#S'`
+        : "tmux display-message -p '#S'";
+      const sessionName = execSync(displayCmd, {
         encoding: "utf-8",
         timeout: 3000,
         stdio: ["pipe", "pipe", "pipe"],
@@ -172,7 +177,11 @@ export function getCurrentTmuxPaneId(): string | null {
   const envPane = process.env.TMUX_PANE;
   if (process.env.TMUX && envPane && /^%\d+$/.test(envPane)) return envPane;
 
-  // Try tmux display-message if $TMUX is set
+  // Try tmux display-message if $TMUX is set.
+  // NOTE: This fallback is intentionally untargeted -- it is only reached when
+  // TMUX_PANE is absent or invalid, so there is no env-based pane target
+  // available. In the multi-session case this may resolve to the wrong client,
+  // but it is still better than nothing and matches the PID-walk fallback below.
   if (process.env.TMUX) {
     try {
       const paneId = execSync("tmux display-message -p '#{pane_id}'", {

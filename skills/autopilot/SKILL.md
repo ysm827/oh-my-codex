@@ -139,7 +139,7 @@ Why bad: This is an exploration/brainstorming request. Respond conversationally 
 Optional settings in `~/.codex/config.toml`:
 
 ```toml
-[omc.autopilot]
+[omx.autopilot]
 maxIterations = 10
 maxQaCycles = 5
 maxValidationRounds = 3
@@ -172,7 +172,7 @@ RALPLAN (consensus planning) -> team-exec (Codex CLI workers) -> ralph-verify (a
 Pipeline configuration options:
 
 ```toml
-[omc.autopilot.pipeline]
+[omx.autopilot.pipeline]
 maxRalphIterations = 10    # Ralph verification iteration ceiling
 workerCount = 2            # Number of Codex CLI team workers
 agentType = "executor"     # Agent type for team workers

@@ -154,6 +154,30 @@ export function buildPaneInModeArgv(paneTarget) {
   return ['display-message', '-p', '-t', paneTarget, '#{pane_in_mode}'];
 }
 
+/**
+ * Returns the tmux argv to query the current foreground command of a pane.
+ * Used to detect when the agent process has exited and the pane has returned
+ * to a shell (zsh, bash, fish, etc.).
+ */
+export function buildPaneCurrentCommandArgv(paneTarget) {
+  return ['display-message', '-p', '-t', paneTarget, '#{pane_current_command}'];
+}
+
+const SHELL_COMMANDS = new Set(['zsh', 'bash', 'fish', 'sh', 'dash', 'ksh', 'csh', 'tcsh', 'login']);
+
+/**
+ * Returns true when the pane's foreground process is an interactive shell,
+ * meaning the agent has exited and injection would land on a bare prompt.
+ */
+export function isPaneRunningShell(paneCurrentCommand) {
+  if (typeof paneCurrentCommand !== 'string') return false;
+  const cmd = paneCurrentCommand.trim().toLowerCase();
+  if (cmd === '') return false;
+  // Handle paths like /bin/zsh -> zsh, and flags like -zsh -> zsh
+  const base = cmd.split('/').pop().replace(/^-/, '');
+  return SHELL_COMMANDS.has(base);
+}
+
 export function buildCapturePaneArgv(paneTarget, tailLines = 80) {
   return ['capture-pane', '-t', paneTarget, '-p', '-S', `-${tailLines}`];
 }

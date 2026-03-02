@@ -4,6 +4,87 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-03-02
+
+### Changed
+- Package version bumped to `0.7.6` after `0.7.5` publication.
+
+### Notes
+- Detailed release notes prepared in `docs/release-notes-0.7.6.md`, including smoke verification evidence.
+
+## [0.7.5] - 2026-03-02
+
+Generated strictly from commit logs in `main..dev`:
+
+- Commit window: **26 non-merge commits** (`2026-02-28` to `2026-03-02`)
+- Diff snapshot (`main...dev`): **55 files changed, +4,437 / -242**
+- Source commands:
+  - `git rev-list --no-merges --count main..dev`
+  - `git diff --shortstat main...dev`
+  - `git log --no-merges --date=short --pretty=format:'%ad %h %s' --reverse main..dev`
+
+### Added (from `feat(...)` subjects)
+- `c235a5a` feat(team): add dedicated ralph auto-run cleanup policy (#407) (#412)
+- `1653aa7` feat(team): add dedicated tmux session mode for worker isolation (#416)
+- `7413fe3` feat(team): add per-worker role routing and task decomposition
+
+### Changed / Docs / CI / Refactor
+- `0c68a02` docs: OpenClaw integration guide for notifications (#413)
+- `56091a4` ci: add CI Status gate job for branch protection (#423)
+- `3f6b3fd` refactor(mcp): extract omx_run_team_* to dedicated team-server.ts (#431)
+- `6c1c4eb` docs(changelog): update unreleased notes for main...dev
+
+### Fixed (from `fix(...)` subjects)
+- `8d3fef0` fix(notifications): native OpenClaw gateway support (#414) (#415)
+- `383d79d` fix(tmux): source shell profile (.zshrc/.bashrc) for detached session launch
+- `d4f6803` fix(team): revert dedicated tmux session mode, restore split-pane default
+- `576ec9c` fix(ralph): exclude option values from CLI task description (#424)
+- `6eed3c6` fix(notify-hook): add structured logging for visual-verdict parse/persist failures (#428)
+- `b5dc657` fix(team): fix 3 regressions in team/ralph shutdown and resume paths (#430)
+- `c3d1220` fix(team): switch dedicated tmux session to opt-in with worker location hint (#432)
+- `454e69d` fix(team): force cleanup on failed/cancelled runs, await worktree rollback, refresh dead-worker panes (#438)
+- `c8632fa` fix(team): fix leader pane targeting in notify-hook dispatch and runtime fallback (#433, #437) (#439)
+- `587ec94` fix(team): harden autoscaling pane cleanup and teardown
+- `12dea24` fix(team): preserve layout during scale-up and add regression test
+- `f5d47f4` fix(tmux): skip injection when pane returns to shell (#441) (#442)
+- `cc64635` fix(tmux): target correct session when spawning team panes
+- `d33ecfc` fix(team): remove unused symbols flagged in PR review
+- `f0cc833` fix(tmux): restore injection when scoped mode state is missing
+- `baeb8e7` fix(skills): restore visual-verdict contract and ralph visual-loop guidance
+- `e0c5974` fix(skills): normalize forked OMC references to OMX canonical paths
+
+### Reverts
+- `ee72e1f` Revert "fix(team): switch dedicated tmux session to opt-in with worker location hint (#432)"
+- `a5f2b77` Revert "fix(skills): restore visual-verdict contract and ralph visual-loop guidance"
+
+### Full `main..dev` commit log (`git log --reverse` history order; not strict date sort)
+- `2026-02-28` `c235a5a` feat(team): add dedicated ralph auto-run cleanup policy (#407) (#412)
+- `2026-02-28` `8d3fef0` fix(notifications): native OpenClaw gateway support (#414) (#415)
+- `2026-03-01` `1653aa7` feat(team): add dedicated tmux session mode for worker isolation (#416)
+- `2026-03-01` `0c68a02` docs: OpenClaw integration guide for notifications (#413)
+- `2026-03-01` `383d79d` fix(tmux): source shell profile (.zshrc/.bashrc) for detached session launch
+- `2026-03-01` `d4f6803` fix(team): revert dedicated tmux session mode, restore split-pane default
+- `2026-03-01` `56091a4` ci: add CI Status gate job for branch protection (#423)
+- `2026-03-01` `576ec9c` fix(ralph): exclude option values from CLI task description (#424)
+- `2026-03-01` `6eed3c6` fix(notify-hook): add structured logging for visual-verdict parse/persist failures (#428)
+- `2026-03-01` `b5dc657` fix(team): fix 3 regressions in team/ralph shutdown and resume paths (#430)
+- `2026-03-01` `3f6b3fd` refactor(mcp): extract omx_run_team_* to dedicated team-server.ts (#431)
+- `2026-03-01` `ee72e1f` Revert "fix(team): switch dedicated tmux session to opt-in with worker location hint (#432)"
+- `2026-03-02` `c3d1220` fix(team): switch dedicated tmux session to opt-in with worker location hint (#432)
+- `2026-03-02` `454e69d` fix(team): force cleanup on failed/cancelled runs, await worktree rollback, refresh dead-worker panes (#438)
+- `2026-03-02` `c8632fa` fix(team): fix leader pane targeting in notify-hook dispatch and runtime fallback (#433, #437) (#439)
+- `2026-03-01` `587ec94` fix(team): harden autoscaling pane cleanup and teardown
+- `2026-03-02` `12dea24` fix(team): preserve layout during scale-up and add regression test
+- `2026-03-02` `f5d47f4` fix(tmux): skip injection when pane returns to shell (#441) (#442)
+- `2026-03-02` `7413fe3` feat(team): add per-worker role routing and task decomposition
+- `2026-03-02` `cc64635` fix(tmux): target correct session when spawning team panes
+- `2026-03-02` `d33ecfc` fix(team): remove unused symbols flagged in PR review
+- `2026-03-02` `f0cc833` fix(tmux): restore injection when scoped mode state is missing
+- `2026-03-02` `baeb8e7` fix(skills): restore visual-verdict contract and ralph visual-loop guidance
+- `2026-03-02` `a5f2b77` Revert "fix(skills): restore visual-verdict contract and ralph visual-loop guidance"
+- `2026-03-02` `6c1c4eb` docs(changelog): update unreleased notes for main...dev
+- `2026-03-02` `e0c5974` fix(skills): normalize forked OMC references to OMX canonical paths
+
 ## [0.7.3] - 2026-02-28
 
 55 files changed. Pipeline orchestrator, uninstall command, team dispatch hardening, and config idempotency.

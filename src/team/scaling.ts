@@ -20,7 +20,7 @@ import {
   sendToWorker,
   isWorkerAlive,
   getWorkerPanePid,
-  killWorker,
+  teardownWorkerPanes,
   buildWorkerStartupCommand,
   resolveTeamWorkerCliPlan,
 } from './tmux-session.js';
@@ -50,6 +50,8 @@ import {
   generateInitialInbox,
   generateTriggerMessage,
 } from './worker-bootstrap.js';
+import { loadRolePrompt } from './role-router.js';
+import { codexPromptsDir } from '../utils/paths.js';
 import {
   resolveTeamWorkerLaunchArgs,
   isLowComplexityAgentType,
@@ -99,15 +101,15 @@ export interface ScaleError {
   error: string;
 }
 
-function notifyWorkerPaneOutcome(
+async function notifyWorkerPaneOutcome(
   sessionName: string,
   workerIndex: number,
   message: string,
   paneId?: string,
   workerCli?: 'codex' | 'claude',
-): DispatchOutcome {
+): Promise<DispatchOutcome> {
   try {
-    sendToWorker(sessionName, workerIndex, message, paneId, workerCli);
+    await sendToWorker(sessionName, workerIndex, message, paneId, workerCli);
     return { ok: true, transport: 'tmux_send_keys', reason: 'tmux_send_keys_sent' };
   } catch (error) {
     return {
@@ -130,7 +132,7 @@ export async function scaleUp(
   teamName: string,
   count: number,
   agentType: string,
-  tasks: Array<{ subject: string; description: string; owner?: string; blocked_by?: string[] }>,
+  tasks: Array<{ subject: string; description: string; owner?: string; blocked_by?: string[]; role?: string }>,
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ScaleUpResult | ScaleError> {
@@ -201,13 +203,16 @@ export async function scaleUp(
         workerCliPlan[i],
       );
 
-      // Find the right-most worker pane to split from, or leader pane
+      // Find the right-most worker pane to split from, or fall back to leader pane.
+      // Keep the initial split from leader horizontal to preserve the leader-left
+      // / workers-right composition.
       const splitTarget = config.workers.length > 0
         ? (config.workers[config.workers.length - 1]?.pane_id ?? config.leader_pane_id ?? '')
         : (config.leader_pane_id ?? '');
+      const splitDirection = splitTarget === (config.leader_pane_id ?? '') ? '-h' : '-v';
 
       const result = spawnSync('tmux', [
-        'split-window', '-v', '-t', splitTarget, '-d', '-P', '-F', '#{pane_id}', '-c', leaderCwd, cmd,
+        'split-window', splitDirection, '-t', splitTarget, '-d', '-P', '-F', '#{pane_id}', '-c', leaderCwd, cmd,
       ], { encoding: 'utf-8' });
 
       if (result.status !== 0) {
@@ -219,16 +224,26 @@ export async function scaleUp(
         return { ok: false, error: `Failed to capture pane ID for ${workerName}` };
       }
 
-      // Re-layout to keep things tidy
-      spawnSync('tmux', ['select-layout', '-t', sessionName, 'tiled'], { encoding: 'utf-8' });
+      // Intentionally avoid forcing `select-layout tiled` here.
+      // Tiled relayout reflows leader/HUD panes and breaks team window layout.
 
       // Get PID
       const panePid = getWorkerPanePid(sessionName, workerIndex, paneId);
 
+      // Resolve per-worker role from assigned task roles
+      const workerTaskRoles = tasks.filter(t => t.owner === workerName).map(t => t.role).filter(Boolean) as string[];
+      const uniqueTaskRoles = new Set(workerTaskRoles);
+      const workerRole = workerTaskRoles.length > 0 && uniqueTaskRoles.size === 1
+        ? workerTaskRoles[0]
+        : agentType;
+      if (uniqueTaskRoles.size > 1) {
+        console.log(`[omx:scaling] ${workerName}: mixed task roles [${[...uniqueTaskRoles].join(', ')}], falling back to ${agentType}`);
+      }
+
       const workerInfo: WorkerInfo = {
         name: workerName,
         index: workerIndex,
-        role: agentType,
+        role: workerRole,
         worker_cli: workerCliPlan[i],
         assigned_tasks: [],
         pid: panePid ?? undefined,
@@ -251,16 +266,25 @@ export async function scaleUp(
 
       // Get assigned tasks for this worker
       const workerTasks = tasks.filter(t => t.owner === workerName);
+
+      // Load role-specific prompt content if role differs from default
+      const rolePromptContent = workerRole !== agentType
+        ? await loadRolePrompt(workerRole, codexPromptsDir())
+        : null;
+
       const inbox = generateInitialInbox(workerName, sanitized, agentType, workerTasks.map((t, idx) => ({
         id: String(idx + 1),
         subject: t.subject,
         description: t.description,
         status: 'pending' as const,
         blocked_by: t.blocked_by,
+        role: t.role,
         created_at: new Date().toISOString(),
       })), {
         teamStateRoot,
         leaderCwd,
+        workerRole,
+        rolePromptContent: rolePromptContent ?? undefined,
       });
 
       const trigger = generateTriggerMessage(workerName, sanitized);
@@ -275,11 +299,11 @@ export async function scaleUp(
         transportPreference: dispatchPolicy.dispatch_mode,
         fallbackAllowed: true,
         inboxCorrelationKey: `scale_up:${workerName}`,
-        notify: (_target, message) => {
+        notify: async (_target, message) => {
           if (dispatchPolicy.dispatch_mode === 'hook_preferred_with_fallback') {
             return { ok: true, transport: 'hook', reason: 'queued_for_hook_dispatch' };
           }
-          return notifyWorkerPaneOutcome(sessionName, workerIndex, message, paneId, workerCliPlan[i]);
+          return await notifyWorkerPaneOutcome(sessionName, workerIndex, message, paneId, workerCliPlan[i]);
         },
       });
       let outcome = queued;
@@ -291,7 +315,7 @@ export async function scaleUp(
         if (receipt && (receipt.status === 'notified' || receipt.status === 'delivered')) {
           outcome = { ok: true, transport: 'hook', reason: `hook_receipt_${receipt.status}`, request_id: queued.request_id };
         } else {
-          const fallback = notifyWorkerPaneOutcome(sessionName, workerIndex, trigger, paneId, workerCliPlan[i]);
+          const fallback = await notifyWorkerPaneOutcome(sessionName, workerIndex, trigger, paneId, workerCliPlan[i]);
           if (receipt?.status === 'failed') {
             if (fallback.ok) {
               await transitionDispatchRequest(
@@ -371,7 +395,7 @@ export async function scaleUp(
       // Retry dispatch once if a trust prompt is blocking the worker pane (fixes #393).
       if (!outcome.ok && dismissTrustPromptIfPresent(sessionName, workerIndex, paneId)) {
         waitForWorkerReady(sessionName, workerIndex, readyTimeoutMs, paneId);
-        const retry = notifyWorkerPaneOutcome(sessionName, workerIndex, trigger, paneId, workerCliPlan[i]);
+        const retry = await notifyWorkerPaneOutcome(sessionName, workerIndex, trigger, paneId, workerCliPlan[i]);
         if (retry.ok) {
           outcome = retry;
         }
@@ -522,14 +546,16 @@ export async function scaleDown(
 
     // Phase 3: Kill tmux panes and remove from config
     const leaderPaneId = config.leader_pane_id;
-    for (const w of targetWorkers) {
-      // Guard: never kill leader or HUD panes
-      if (leaderPaneId && w.pane_id === leaderPaneId) continue;
-      if (config.hud_pane_id && w.pane_id === config.hud_pane_id) continue;
+    const hudPaneId = config.hud_pane_id;
+    const targetPaneIds = targetWorkers
+      .map((w) => w.pane_id)
+      .filter((paneId): paneId is string => typeof paneId === 'string' && paneId.trim().length > 0);
+    await teardownWorkerPanes(targetPaneIds, {
+      leaderPaneId,
+      hudPaneId,
+    });
 
-      if (isWorkerAlive(sessionName, w.index, w.pane_id)) {
-        killWorker(sessionName, w.index, w.pane_id, leaderPaneId ?? undefined);
-      }
+    for (const w of targetWorkers) {
       removedNames.push(w.name);
     }
 

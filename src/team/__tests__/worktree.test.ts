@@ -163,9 +163,35 @@ describe('worktree ensure + rollback', () => {
       assert.equal(existsSync(ensured.worktreePath), true);
       assert.equal(branchExists(repo, 'feature/rollback'), true);
 
-      rollbackProvisionedWorktrees([ensured]);
+      await rollbackProvisionedWorktrees([ensured]);
       assert.equal(existsSync(ensured.worktreePath), false);
       assert.equal(branchExists(repo, 'feature/rollback'), false);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('rollbackProvisionedWorktrees with skipBranchDeletion preserves branches', async () => {
+    const repo = await initRepo();
+    try {
+      const plan = planWorktreeTarget({
+        cwd: repo,
+        scope: 'launch',
+        mode: { enabled: true, detached: false, name: 'feature/ralph-keep' },
+      });
+      assert.equal(plan.enabled, true);
+      if (!plan.enabled) return;
+
+      const ensured = ensureWorktree(plan);
+      assert.equal(ensured.enabled, true);
+      if (!ensured.enabled) return;
+      assert.equal(existsSync(ensured.worktreePath), true);
+      assert.equal(branchExists(repo, 'feature/ralph-keep'), true);
+
+      await rollbackProvisionedWorktrees([ensured], { skipBranchDeletion: true });
+      assert.equal(existsSync(ensured.worktreePath), false);
+      // Branch is preserved when skipBranchDeletion is true (ralph policy)
+      assert.equal(branchExists(repo, 'feature/ralph-keep'), true);
     } finally {
       await rm(repo, { recursive: true, force: true });
     }

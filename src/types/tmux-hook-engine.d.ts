@@ -45,6 +45,8 @@ declare module '*tmux-hook-engine.js' {
   }): { allow: boolean; reason: string; dedupeKey?: string };
   export function buildCapturePaneArgv(paneTarget: string, tailLines?: number): string[];
   export function buildPaneInModeArgv(paneTarget: string): string[];
+  export function buildPaneCurrentCommandArgv(paneTarget: string): string[];
+  export function isPaneRunningShell(paneCurrentCommand: string): boolean;
   export function buildSendKeysArgv(args: {
     paneTarget: string;
     prompt: string;

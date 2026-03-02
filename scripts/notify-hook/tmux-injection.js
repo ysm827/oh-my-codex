@@ -22,6 +22,8 @@ import {
   evaluateInjectionGuards,
   buildSendKeysArgv,
   buildPaneInModeArgv,
+  buildPaneCurrentCommandArgv,
+  isPaneRunningShell,
 } from '../tmux-hook-engine.js';
 
 export async function resolveSessionToPane(sessionName) {
@@ -188,9 +190,14 @@ export async function handleTmuxInjection({
 
   const activeModes = [];
   const activeModeStates = {};
-  try {
-    const scopedDirs = await getScopedStateDirsForCurrentSession(stateDir);
-    for (const scopedDir of scopedDirs) {
+  const scannedStateDirs = new Set();
+  const payloadSessionId = safeString(payload.session_id || payload['session-id'] || '');
+  const scanActiveModeStateDirs = async (dirs, preserveExisting = false) => {
+    for (const scopedDir of dirs) {
+      const resolvedScopedDir = resolvePath(scopedDir);
+      if (scannedStateDirs.has(resolvedScopedDir)) continue;
+      scannedStateDirs.add(resolvedScopedDir);
+
       const files = await readdir(scopedDir).catch(() => []);
       for (const file of files) {
         if (!file.endsWith('-state.json') || file === 'tmux-hook-state.json') continue;
@@ -199,9 +206,19 @@ export async function handleTmuxInjection({
         if (parsed && parsed.active) {
           const modeName = file.replace('-state.json', '');
           activeModes.push(modeName);
-          activeModeStates[modeName] = parsed;
+          if (!preserveExisting || !activeModeStates[modeName]) {
+            activeModeStates[modeName] = parsed;
+          }
         }
       }
+    }
+  };
+  try {
+    const scopedDirs = await getScopedStateDirsForCurrentSession(stateDir, payloadSessionId);
+    await scanActiveModeStateDirs(scopedDirs);
+
+    if (!pickActiveMode(activeModes, config.allowed_modes) && !scannedStateDirs.has(resolvePath(stateDir))) {
+      await scanActiveModeStateDirs([stateDir], true);
     }
   } catch {
     // Non-fatal
@@ -354,6 +371,30 @@ export async function handleTmuxInjection({
     } catch {
       // Non-fatal: if querying copy-mode state fails, proceed with injection.
     }
+  }
+
+  // Shell-detection guard: skip injection when the agent process has exited
+  // and the pane has returned to an interactive shell (zsh, bash, etc.).
+  // Sending the inject marker to a shell causes glob errors like
+  // "zsh: no matches found: [OMX_TMUX_INJECT]".  See #441.
+  try {
+    const cmdResult = await runProcess('tmux', buildPaneCurrentCommandArgv(paneTarget), 1000);
+    const currentCmd = safeString(cmdResult.stdout).trim();
+    if (isPaneRunningShell(currentCmd)) {
+      state.last_reason = 'agent_not_running';
+      state.last_event_at = nowIso;
+      await writeFile(hookStatePath, JSON.stringify(state, null, 2)).catch(() => {});
+      await logTmuxHookEvent(logsDir, {
+        ...baseLog,
+        event: 'injection_skipped',
+        reason: 'agent_not_running',
+        pane_target: paneTarget,
+        pane_current_command: currentCmd,
+      });
+      return;
+    }
+  } catch {
+    // Non-fatal: if querying pane command fails, proceed with injection.
   }
 
   if (config.dry_run) {
