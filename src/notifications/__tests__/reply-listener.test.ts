@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, type spawnSync } from 'node:child_process';
 import type { ClientRequestArgs, IncomingMessage } from 'node:http';
 import { PassThrough } from 'node:stream';
 import {
@@ -237,6 +237,27 @@ describe('isReplyListenerProcess', () => {
 
   it('returns false for a non-existent PID', () => {
     assert.equal(isReplyListenerProcess(0), false);
+  });
+
+  it('returns false on Windows when ps is unavailable', () => {
+    const result = isReplyListenerProcess(123, {
+      platform: 'win32',
+      env: {
+        PATH: '',
+        PATHEXT: '.EXE;.CMD;.PS1',
+      },
+      spawnImpl: ((() => ({
+        pid: 0,
+        output: [null, '', ''],
+        stdout: '',
+        stderr: '',
+        status: null,
+        signal: null,
+        error: Object.assign(new Error('spawnSync ps ENOENT'), { code: 'ENOENT' }),
+      })) as unknown) as typeof spawnSync,
+    });
+
+    assert.equal(result, false);
   });
 });
 
