@@ -696,15 +696,19 @@ exit 0
       assert.ok(existsSync(eventsPath), 'events.ndjson should exist');
       const content = await readFile(eventsPath, 'utf-8');
       const events = content.trim().split('\n').map(line => JSON.parse(line));
-      const workerIdleEvent = events.find((e: { type: string }) => e.type === 'worker_idle');
+      const workerIdleEvent = events.find((e: { type: string; orchestration_intent?: string }) => e.type === 'worker_idle');
       assert.ok(workerIdleEvent, 'should have a worker_idle event');
       assert.equal(workerIdleEvent.team, teamName);
       assert.equal(workerIdleEvent.worker, 'worker-1');
       assert.equal(workerIdleEvent.prev_state, 'working');
       assert.equal(workerIdleEvent.task_id, 'task-99');
       assert.equal(workerIdleEvent.reason, 'finished');
+      assert.equal(workerIdleEvent.orchestration_intent, 'followup-reuse');
       assert.ok(workerIdleEvent.event_id, 'event should have an event_id');
       assert.ok(workerIdleEvent.created_at, 'event should have a created_at');
+
+      const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
+      assert.doesNotMatch(tmuxLog, /\[OMX_INTENT:/);
     });
   });
 

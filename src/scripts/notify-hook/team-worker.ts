@@ -3,7 +3,7 @@
  * Team worker: heartbeat, idle detection, and leader notification.
  */
 
-import { readFile, writeFile, mkdir, appendFile, rename, stat } from 'fs/promises';
+import { readFile, writeFile, mkdir, appendFile, rename, stat, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { asNumber, safeString, isTerminalPhase } from './utils.js';
@@ -11,6 +11,11 @@ import { readJsonIfExists } from './state-io.js';
 import { logTmuxHookEvent } from './log.js';
 import { evaluatePaneInjectionReadiness, sendPaneInput } from './team-tmux-guard.js';
 import { resolvePaneTarget } from './tmux-injection.js';
+import {
+  classifyLeaderActionState,
+  resolveAllWorkersIdleIntent,
+  resolveWorkerIdleIntent,
+} from './orchestration-intent.js';
 import { DEFAULT_MARKER } from '../tmux-hook-engine.js';
 const LEADER_PANE_SHELL_NO_INJECTION_REASON = 'leader_pane_shell_no_injection';
 
@@ -258,6 +263,31 @@ export async function readTeamWorkersForIdleCheck(stateDir, teamName) {
   }
 }
 
+async function readTeamTaskCounts(stateDir, teamName) {
+  const tasksDir = join(stateDir, 'team', teamName, 'tasks');
+  const taskCounts = { pending: 0, blocked: 0, in_progress: 0, completed: 0, failed: 0 };
+  if (!existsSync(tasksDir)) return taskCounts;
+
+  try {
+    const taskFiles = (await readdir(tasksDir))
+      .filter((entry) => /^task-\d+\.json$/.test(entry))
+      .sort();
+    for (const entry of taskFiles) {
+      try {
+        const parsed = JSON.parse(await readFile(join(tasksDir, entry), 'utf-8'));
+        const status = safeString(parsed?.status || 'pending').trim() || 'pending';
+        if (Object.hasOwn(taskCounts, status)) taskCounts[status] += 1;
+      } catch {
+        // ignore malformed task files
+      }
+    }
+  } catch {
+    return taskCounts;
+  }
+
+  return taskCounts;
+}
+
 async function resolveCanonicalLeaderPaneId(_tmuxSession, leaderPaneId) {
   const normalizedLeaderPaneId = safeString(leaderPaneId).trim();
   if (normalizedLeaderPaneId) {
@@ -295,6 +325,7 @@ async function emitLeaderPaneMissingDeferred({
   reason = 'leader_pane_missing_no_injection',
   paneCurrentCommand = '',
   sourceType = 'unknown',
+  orchestrationIntent = '',
 }) {
   const nowIso = new Date().toISOString();
   await logTmuxHookEvent(logsDir, {
@@ -306,6 +337,7 @@ async function emitLeaderPaneMissingDeferred({
     reason,
     leader_pane_id: leaderPaneId || null,
     tmux_session: tmuxSession || null,
+    orchestration_intent: orchestrationIntent || null,
     tmux_injection_attempted: false,
     pane_current_command: paneCurrentCommand || null,
     source_type: sourceType,
@@ -324,6 +356,7 @@ async function emitLeaderPaneMissingDeferred({
     created_at: nowIso,
     leader_pane_id: leaderPaneId || null,
     tmux_session: tmuxSession || null,
+    orchestration_intent: orchestrationIntent || null,
     tmux_injection_attempted: false,
     pane_current_command: paneCurrentCommand || null,
     source_type: sourceType,
@@ -393,12 +426,21 @@ export async function maybeNotifyLeaderAllWorkersIdle({ cwd, stateDir, logsDir, 
   );
   if (!allIdle) return;
 
+  const taskCounts = await readTeamTaskCounts(stateDir, teamName);
+  const leaderActionState = classifyLeaderActionState({
+    allWorkersIdle: allIdle,
+    workerPanesAlive: snapshots.length > 0,
+    taskCounts,
+  });
+  const orchestrationIntent = resolveAllWorkersIdleIntent(leaderActionState);
+
   if (!canonicalLeaderPaneId) {
     const nextIdleState = {
       ...idleState,
       last_notified_at_ms: nowMs,
       last_notified_at: nowIso,
       worker_count: workers.length,
+      orchestration_intent: orchestrationIntent,
       delivery: 'deferred',
     };
     await writeFile(idleStatePath, JSON.stringify(nextIdleState, null, 2)).catch(() => {});
@@ -410,6 +452,7 @@ export async function maybeNotifyLeaderAllWorkersIdle({ cwd, stateDir, logsDir, 
       sourceType: 'all_workers_idle',
       tmuxSession,
       leaderPaneId: canonicalLeaderPaneId,
+      orchestrationIntent,
     });
     return;
   }
@@ -425,6 +468,7 @@ export async function maybeNotifyLeaderAllWorkersIdle({ cwd, stateDir, logsDir, 
       last_notified_at_ms: nowMs,
       last_notified_at: nowIso,
       worker_count: N,
+      orchestration_intent: orchestrationIntent,
       delivery: 'deferred_shell',
       pane_current_command: paneGuard.paneCurrentCommand || null,
     };
@@ -439,6 +483,7 @@ export async function maybeNotifyLeaderAllWorkersIdle({ cwd, stateDir, logsDir, 
       sourceType: 'all_workers_idle',
       tmuxSession,
       leaderPaneId: canonicalLeaderPaneId,
+      orchestrationIntent,
     });
     return;
   }
@@ -457,6 +502,7 @@ export async function maybeNotifyLeaderAllWorkersIdle({ cwd, stateDir, logsDir, 
       last_notified_at_ms: nowMs,
       last_notified_at: nowIso,
       worker_count: N,
+      orchestration_intent: orchestrationIntent,
     };
     await writeFile(idleStatePath, JSON.stringify(nextIdleState, null, 2)).catch(() => {});
 
@@ -470,6 +516,7 @@ export async function maybeNotifyLeaderAllWorkersIdle({ cwd, stateDir, logsDir, 
         type: 'all_workers_idle',
         worker: workerName,
         worker_count: N,
+        orchestration_intent: orchestrationIntent,
         created_at: nowIso,
       };
       await appendFile(eventsPath, JSON.stringify(event) + '\n');
@@ -482,6 +529,7 @@ export async function maybeNotifyLeaderAllWorkersIdle({ cwd, stateDir, logsDir, 
       tmux_target: tmuxTarget,
       worker: workerName,
       worker_count: N,
+      orchestration_intent: orchestrationIntent,
     });
   } catch (err) {
     await logTmuxHookEvent(logsDir, {
@@ -490,6 +538,7 @@ export async function maybeNotifyLeaderAllWorkersIdle({ cwd, stateDir, logsDir, 
       team: teamName,
       tmux_target: tmuxTarget,
       worker: workerName,
+      orchestration_intent: orchestrationIntent,
       error: err instanceof Error ? err.message : safeString(err),
     }).catch(() => {});
   }
@@ -557,6 +606,7 @@ export async function maybeNotifyLeaderWorkerIdle({ cwd, stateDir, logsDir, pars
   if (currentState !== 'idle' && currentState !== 'done') return;
   if (!statusFresh) return;
   if (prevState === 'idle' || prevState === 'done') return;
+  const orchestrationIntent = resolveWorkerIdleIntent(currentState);
 
   const heartbeat = await readWorkerHeartbeatSnapshot(stateDir, teamName, workerName, nowMs);
   if (!heartbeat.fresh) return;
@@ -588,6 +638,7 @@ export async function maybeNotifyLeaderWorkerIdle({ cwd, stateDir, logsDir, pars
       sourceType: 'worker_idle',
       tmuxSession,
       leaderPaneId: canonicalLeaderPaneId,
+      orchestrationIntent,
     });
     return;
   }
@@ -600,6 +651,7 @@ export async function maybeNotifyLeaderWorkerIdle({ cwd, stateDir, logsDir, pars
         last_notified_at_ms: nowMs,
         last_notified_at: nowIso,
         prev_state: prevState,
+        orchestration_intent: orchestrationIntent,
         delivery: 'deferred_shell',
         pane_current_command: paneGuard.paneCurrentCommand || null,
       }, null, 2));
@@ -615,6 +667,7 @@ export async function maybeNotifyLeaderWorkerIdle({ cwd, stateDir, logsDir, pars
       sourceType: 'worker_idle',
       tmuxSession,
       leaderPaneId: canonicalLeaderPaneId,
+      orchestrationIntent,
     });
     return;
   }
@@ -643,6 +696,7 @@ export async function maybeNotifyLeaderWorkerIdle({ cwd, stateDir, logsDir, pars
         last_notified_at_ms: nowMs,
         last_notified_at: nowIso,
         prev_state: prevState,
+        orchestration_intent: orchestrationIntent,
       }, null, 2));
       await rename(tmpPath, cooldownPath);
     } catch { /* best effort */ }
@@ -660,6 +714,7 @@ export async function maybeNotifyLeaderWorkerIdle({ cwd, stateDir, logsDir, pars
         prev_state: prevState,
         task_id: currentTaskId || null,
         reason: currentReason || null,
+        orchestration_intent: orchestrationIntent,
         created_at: nowIso,
       };
       await appendFile(eventsPath, JSON.stringify(event) + '\n');
@@ -673,6 +728,7 @@ export async function maybeNotifyLeaderWorkerIdle({ cwd, stateDir, logsDir, pars
       worker: workerName,
       prev_state: prevState,
       task_id: currentTaskId || null,
+      orchestration_intent: orchestrationIntent,
     });
   } catch (err) {
     await logTmuxHookEvent(logsDir, {
@@ -681,6 +737,7 @@ export async function maybeNotifyLeaderWorkerIdle({ cwd, stateDir, logsDir, pars
       team: teamName,
       tmux_target: tmuxTarget,
       worker: workerName,
+      orchestration_intent: orchestrationIntent,
       error: err instanceof Error ? err.message : safeString(err),
     }).catch(() => {});
   }

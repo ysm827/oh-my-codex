@@ -39,6 +39,7 @@ describe('mcp-comm', () => {
         workerIndex: 1,
         inbox: '# hi',
         triggerMessage: 'trigger',
+        intent: 'followup-relaunch',
         cwd,
         notify: async () => {
           events.push('notify');
@@ -52,6 +53,8 @@ describe('mcp-comm', () => {
       assert.equal(outcome.transport, 'tmux_send_keys');
       assert.ok(outcome.request_id);
       assert.deepEqual(events, ['notify']);
+      const requests = await listDispatchRequests('alpha', cwd, { kind: 'inbox' });
+      assert.equal(requests[0]?.intent, 'followup-relaunch');
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -69,6 +72,7 @@ describe('mcp-comm', () => {
         toWorkerIndex: 2,
         body: 'hello',
         triggerMessage: 'check mailbox',
+        intent: 'pending-mailbox-review',
         cwd,
         notify: async () => ({ ok: true, transport: 'tmux_send_keys', reason: 'sent' }),
       });
@@ -83,6 +87,7 @@ describe('mcp-comm', () => {
       const requests = await listDispatchRequests('alpha', cwd, { kind: 'mailbox' });
       assert.equal(requests.length, 1);
       assert.equal(requests[0]?.message_id, mailbox[0]?.message_id);
+      assert.equal(requests[0]?.intent, 'pending-mailbox-review');
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

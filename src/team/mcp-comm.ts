@@ -11,6 +11,7 @@ import {
   type TeamDispatchRequestInput,
 } from './team-ops.js';
 import { appendTeamDeliveryLogForCwd } from './delivery-log.js';
+import type { TeamReminderIntent } from './reminder-intents.js';
 
 export interface TeamNotifierTarget {
   workerName: string;
@@ -72,9 +73,10 @@ async function logDispatchOutcome(params: {
   toWorker: string;
   dispatchKind: 'inbox' | 'mailbox';
   outcome: DispatchOutcome;
+  intent?: TeamReminderIntent;
   transportPreference?: TeamDispatchRequestInput['transport_preference'];
 }): Promise<void> {
-  const { cwd, teamName, source, requestId, messageId, toWorker, dispatchKind, outcome, transportPreference } = params;
+  const { cwd, teamName, source, requestId, messageId, toWorker, dispatchKind, outcome, intent, transportPreference } = params;
   const result = outcome.ok
     ? (outcome.reason === 'queued_for_hook_dispatch' ? 'queued' : 'ok')
     : 'failed';
@@ -86,6 +88,7 @@ async function logDispatchOutcome(params: {
     message_id: messageId,
     to_worker: toWorker,
     dispatch_kind: dispatchKind,
+    intent,
     transport_preference: transportPreference,
     transport: outcome.transport,
     result,
@@ -151,6 +154,7 @@ interface QueueInboxParams {
   paneId?: string;
   inbox: string;
   triggerMessage: string;
+  intent?: TeamReminderIntent;
   cwd: string;
   transportPreference?: TeamDispatchRequestInput['transport_preference'];
   fallbackAllowed?: boolean;
@@ -168,6 +172,7 @@ export async function queueInboxInstruction(params: QueueInboxParams): Promise<D
       worker_index: params.workerIndex,
       pane_id: params.paneId,
       trigger_message: params.triggerMessage,
+      intent: params.intent,
       transport_preference: params.transportPreference,
       fallback_allowed: params.fallbackAllowed,
       inbox_correlation_key: params.inboxCorrelationKey,
@@ -219,6 +224,7 @@ export async function queueInboxInstruction(params: QueueInboxParams): Promise<D
     toWorker: params.workerName,
     dispatchKind: 'inbox',
     outcome,
+    intent: params.intent,
     transportPreference: params.transportPreference,
   });
 
@@ -233,6 +239,7 @@ interface QueueDirectMessageParams {
   toPaneId?: string;
   body: string;
   triggerMessage: string;
+  intent?: TeamReminderIntent;
   cwd: string;
   transportPreference?: TeamDispatchRequestInput['transport_preference'];
   fallbackAllowed?: boolean;
@@ -257,6 +264,7 @@ export async function queueDirectMailboxMessage(params: QueueDirectMessageParams
       toWorker: params.toWorker,
       dispatchKind: 'mailbox',
       outcome,
+      intent: params.intent,
       transportPreference: params.transportPreference,
     });
     return outcome;
@@ -269,6 +277,7 @@ export async function queueDirectMailboxMessage(params: QueueDirectMessageParams
       worker_index: params.toWorkerIndex,
       pane_id: params.toPaneId,
       trigger_message: params.triggerMessage,
+      intent: params.intent,
       message_id: message.message_id,
       transport_preference: params.transportPreference,
       fallback_allowed: params.fallbackAllowed,
@@ -317,6 +326,7 @@ export async function queueDirectMailboxMessage(params: QueueDirectMessageParams
       toWorker: params.toWorker,
       dispatchKind: 'mailbox',
       outcome,
+      intent: params.intent,
       transportPreference: params.transportPreference,
     });
     return outcome;
@@ -347,6 +357,7 @@ export async function queueDirectMailboxMessage(params: QueueDirectMessageParams
     toWorker: params.toWorker,
     dispatchKind: 'mailbox',
     outcome,
+    intent: params.intent,
     transportPreference: params.transportPreference,
   });
   return outcome;
@@ -359,6 +370,7 @@ interface QueueBroadcastParams {
   body: string;
   cwd: string;
   triggerFor: (workerName: string) => string;
+  intentFor?: (workerName: string) => TeamReminderIntent;
   transportPreference?: TeamDispatchRequestInput['transport_preference'];
   fallbackAllowed?: boolean;
   notify: TeamNotifier;
@@ -381,6 +393,7 @@ export async function queueBroadcastMailboxMessage(params: QueueBroadcastParams)
         worker_index: recipient.workerIndex,
         pane_id: recipient.paneId,
         trigger_message: params.triggerFor(recipient.workerName),
+        intent: params.intentFor?.(recipient.workerName),
         message_id: message.message_id,
         transport_preference: params.transportPreference,
         fallback_allowed: params.fallbackAllowed,
@@ -444,6 +457,7 @@ export async function queueBroadcastMailboxMessage(params: QueueBroadcastParams)
       toWorker: recipient.workerName,
       dispatchKind: 'mailbox',
       outcome,
+      intent: params.intentFor?.(recipient.workerName),
       transportPreference: params.transportPreference,
     });
   }

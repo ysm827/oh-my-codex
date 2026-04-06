@@ -64,6 +64,7 @@ import {
   type TeamTaskStatus,
   type TeamEventType,
 } from './contracts.js';
+import type { TeamReminderIntent } from './reminder-intents.js';
 import type { WorktreeMode } from './worktree.js';
 
 export type { TeamDispatchRequestStatus, TeamWorkerIntegrationStatus } from './contracts.js';
@@ -192,6 +193,7 @@ export interface TeamDispatchRequest {
   worker_index?: number;
   pane_id?: string;
   trigger_message: string;
+  intent?: TeamReminderIntent;
   message_id?: string;
   inbox_correlation_key?: string;
   transport_preference: TeamDispatchTransportPreference;
@@ -212,6 +214,7 @@ export interface TeamDispatchRequestInput {
   worker_index?: number;
   pane_id?: string;
   trigger_message: string;
+  intent?: TeamReminderIntent;
   message_id?: string;
   inbox_correlation_key?: string;
   transport_preference?: TeamDispatchTransportPreference;
@@ -266,6 +269,7 @@ export interface TeamEvent {
   task_id?: string;
   message_id?: string | null;
   reason?: string;
+  intent?: TeamReminderIntent;
   state?: WorkerStatus['state'];
   prev_state?: WorkerStatus['state'];
   worker_count?: number;
@@ -1476,6 +1480,7 @@ function serializeDispatchRequestToBridgeRecord(request: TeamDispatchRequest): D
       worker_index: request.worker_index,
       pane_id: request.pane_id,
       trigger_message: request.trigger_message,
+      intent: request.intent,
       message_id: request.message_id,
       inbox_correlation_key: request.inbox_correlation_key,
       transport_preference: request.transport_preference,

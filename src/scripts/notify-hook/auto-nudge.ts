@@ -12,6 +12,7 @@ import { readJsonIfExists, getScopedStateDirsForCurrentSession, readdir } from '
 import { runProcess } from './process-runner.js';
 import { logTmuxHookEvent } from './log.js';
 import { evaluatePaneInjectionReadiness, mapPaneInjectionReadinessReason, sendPaneInput } from './team-tmux-guard.js';
+import { stripOrchestrationIntentTags } from './orchestration-intent.js';
 import { buildCapturePaneArgv, DEFAULT_MARKER, tmuxHookExplicitlyDisablesInjection } from '../tmux-hook-engine.js';
 import {
   isManagedOmxSession,
@@ -282,7 +283,7 @@ const SEMANTIC_STALL_PROMPT_PATTERNS = [
 ];
 
 function normalizeStallDetectionText(text) {
-  return safeString(text)
+  return stripOrchestrationIntentTags(safeString(text))
     .replace(/\r\n?/g, '\n')
     .split('\n')
     .filter((line) => !line.includes(DEFAULT_MARKER))

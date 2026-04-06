@@ -386,6 +386,7 @@ exit 1
           kind: 'inbox',
           to_worker: 'worker-1',
           trigger_message: 'ping',
+          intent: 'followup-relaunch',
         },
         cwd,
       );
@@ -396,8 +397,9 @@ exit 1
       const jsonStart = queueLine.indexOf('{');
       const stateDirFlag = queueLine.lastIndexOf(' --state-dir=');
       const jsonPayload = stateDirFlag > jsonStart ? queueLine.slice(jsonStart, stateDirFlag) : queueLine.slice(jsonStart);
-      const payload = JSON.parse(jsonPayload) as { request_id: string };
+      const payload = JSON.parse(jsonPayload) as { request_id: string; metadata?: { intent?: string } };
       assert.equal(payload.request_id, queued.request.request_id);
+      assert.equal(payload.metadata?.intent, 'followup-relaunch');
     } finally {
       if (typeof previousRuntimeBinary === 'string') process.env.OMX_RUNTIME_BINARY = previousRuntimeBinary;
       else delete process.env.OMX_RUNTIME_BINARY;
@@ -416,6 +418,7 @@ exit 1
           to_worker: 'worker-1',
           message_id: 'msg-1',
           trigger_message: 'check mailbox',
+          intent: 'pending-mailbox-review',
         },
         cwd,
       );
@@ -443,6 +446,7 @@ exit 1
       const listed = await listDispatchRequests('team-dispatch', cwd);
       assert.equal(listed.length, 1);
       assert.equal(listed[0]?.message_id, 'msg-1');
+      assert.equal(listed[0]?.intent, 'pending-mailbox-review');
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

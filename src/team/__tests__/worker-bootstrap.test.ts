@@ -17,8 +17,11 @@ import {
   generateTaskAssignmentInbox,
   generateShutdownInbox,
   generateTriggerMessage,
+  buildTriggerDirective,
   generateMailboxTriggerMessage,
+  buildMailboxTriggerDirective,
   generateLeaderMailboxTriggerMessage,
+  buildLeaderMailboxTriggerDirective,
 } from "../worker-bootstrap.js";
 import { composeRoleInstructionsForRole } from "../../agents/native-config.js";
 import type { TeamTask } from "../state.js";
@@ -444,6 +447,13 @@ describe("worker bootstrap", () => {
     assert.match(message, /next feasible task/i);
   });
 
+  it("buildTriggerDirective keeps human text separate from orchestration intent", () => {
+    const directive = buildTriggerDirective("worker-9", "team-path");
+    assert.equal(directive.intent, "followup-relaunch");
+    assert.match(directive.text, /\.omx\/state\/team\/team-path\/workers\/worker-9\/inbox\.md/);
+    assert.doesNotMatch(directive.text, /OMX_INTENT/);
+  });
+
   it("generateTriggerMessage uses provided state-root reference for worktree workers", () => {
     const message = generateTriggerMessage(
       "worker-9",
@@ -481,6 +491,13 @@ describe("worker bootstrap", () => {
     assert.match(message, /concrete progress/i);
     assert.match(message, /continue assigned work/i);
     assert.match(message, /next feasible task/i);
+  });
+
+  it("buildMailboxTriggerDirective keeps mailbox review intent out of display text", () => {
+    const directive = buildMailboxTriggerDirective("worker-2", "team-mail", 3);
+    assert.equal(directive.intent, "pending-mailbox-review");
+    assert.match(directive.text, /3 new message/);
+    assert.doesNotMatch(directive.text, /OMX_INTENT/);
   });
 
   it("generateMailboxTriggerMessage uses provided state-root reference for worktree workers", () => {
@@ -522,6 +539,13 @@ describe("worker bootstrap", () => {
     assert.match(message, /worker-2 sent a new message/);
     assert.match(message, /Review it and decide the next concrete step/);
     assert.doesNotMatch(message, /\bReply\b/i);
+  });
+
+  it("buildLeaderMailboxTriggerDirective records leader mailbox-review intent separately", () => {
+    const directive = buildLeaderMailboxTriggerDirective("team-mail", "worker-2");
+    assert.equal(directive.intent, "pending-mailbox-review");
+    assert.match(directive.text, /worker-2 sent a new message/);
+    assert.doesNotMatch(directive.text, /OMX_INTENT/);
   });
 
   it("generateLeaderMailboxTriggerMessage uses provided state-root reference for worktree leaders", () => {

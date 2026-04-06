@@ -355,6 +355,7 @@ describe('notify-hook team leader nudge', () => {
       assert.match(tmuxLog, /send-keys/);
       assert.match(tmuxLog, /-t %99/, 'should target leader pane when present');
       assert.match(tmuxLog, /\[OMX\] All 2 workers idle/, 'should emit all-workers-idle nudge');
+      assert.doesNotMatch(tmuxLog, /\[OMX_INTENT:/, 'should keep orchestration intent out of injected display text');
       assert.match(tmuxLog, /\[OMX_TMUX_INJECT\]/, 'should include injection marker');
       const submitMatches = tmuxLog.match(/send-keys -t %99 C-m/g) || [];
       assert.equal(submitMatches.length, 2, 'leader nudge should submit with isolated double C-m');
@@ -364,9 +365,10 @@ describe('notify-hook team leader nudge', () => {
       assert.ok(existsSync(eventsPath), 'events.ndjson should exist');
       const eventsContent = await readFile(eventsPath, 'utf-8');
       const events = eventsContent.trim().split('\n').map(line => JSON.parse(line));
-      const nudgeEvent = events.find((e: { type: string }) => e.type === 'team_leader_nudge');
+      const nudgeEvent = events.find((e: { type: string; orchestration_intent?: string }) => e.type === 'team_leader_nudge');
       assert.ok(nudgeEvent, 'should have team_leader_nudge event');
       assert.equal(nudgeEvent.reason, 'done_waiting_on_leader');
+      assert.equal(nudgeEvent.orchestration_intent, 'done-review-or-shutdown');
     });
   });
 
@@ -849,12 +851,14 @@ exit 0
       assert.match(tmuxLog, /no start evidence/);
       assert.match(tmuxLog, /status: unknown/);
       assert.match(tmuxLog, /Next: check worker-1 msg\/output, confirm task in omx team status ack-missing-start/);
+      assert.doesNotMatch(tmuxLog, /\[OMX_INTENT:/);
 
       const eventsPath = join(teamDir, 'events', 'events.ndjson');
       const events = (await readFile(eventsPath, 'utf-8')).trim().split('\n').map(line => JSON.parse(line));
-      const nudgeEvent = events.find((e: { type?: string; reason?: string }) =>
+      const nudgeEvent = events.find((e: { type?: string; reason?: string; orchestration_intent?: string }) =>
         e.type === 'team_leader_nudge' && e.reason === 'ack_without_start_evidence');
       assert.ok(nudgeEvent, 'should emit an ack_without_start_evidence leader nudge');
+      assert.equal(nudgeEvent.orchestration_intent, 'followup-relaunch');
     });
   });
 
@@ -934,7 +938,7 @@ exit 0
 
       const eventsPath = join(teamDir, 'events', 'events.ndjson');
       const events = (await readFile(eventsPath, 'utf-8')).trim().split('\n').map(line => JSON.parse(line));
-      const nudgeEvent = events.find((e: { type?: string }) => e.type === 'team_leader_nudge');
+      const nudgeEvent = events.find((e: { type?: string; reason?: string; orchestration_intent?: string }) => e.type === 'team_leader_nudge');
       assert.equal(nudgeEvent?.reason, 'new_mailbox_message');
     });
   });
@@ -1709,12 +1713,14 @@ exit 0
       assert.match(tmuxLog, /Team stalled-progress: leader stale, no progress 3m\./);
       assert.match(tmuxLog, /Read worker messages, then choose by worker status: continue, steer, or shut down if done\./);
       assert.doesNotMatch(tmuxLog, /keep polling/);
+      assert.doesNotMatch(tmuxLog, /\[OMX_INTENT:/);
       assert.match(tmuxLog, /\[OMX_TMUX_INJECT\]/);
 
       const eventsPath = join(teamDir, 'events', 'events.ndjson');
       const events = (await readFile(eventsPath, 'utf-8')).trim().split('\n').map(line => JSON.parse(line));
       const nudgeEvent = events.find((e: { type?: string }) => e.type === 'team_leader_nudge');
       assert.equal(nudgeEvent?.reason, 'stuck_waiting_on_leader');
+      assert.equal(nudgeEvent?.orchestration_intent, 'stalled-unblock');
     });
   });
 
@@ -2401,12 +2407,13 @@ exit 0
       assert.ok(existsSync(eventsPath), 'events.ndjson should exist after nudge');
       const eventsContent = await readFile(eventsPath, 'utf-8');
       const events = eventsContent.trim().split('\n').map(line => JSON.parse(line));
-      const nudgeEvent = events.find((e: { type: string }) => e.type === 'team_leader_nudge');
+      const nudgeEvent = events.find((e: { type: string; orchestration_intent?: string }) => e.type === 'team_leader_nudge');
       assert.ok(nudgeEvent, 'should have a team_leader_nudge event');
       assert.equal(nudgeEvent.team, teamName);
       assert.equal(nudgeEvent.worker, 'leader-fixed');
       assert.ok(nudgeEvent.reason, 'event should have a reason');
       assert.notEqual(nudgeEvent.reason, 'leader_pane_missing_no_injection');
+      assert.ok(nudgeEvent.orchestration_intent, 'event should record an orchestration intent');
     });
   });
 
@@ -2474,12 +2481,14 @@ exit 0
       assert.equal(deferred.source_type, 'leader_nudge');
       assert.equal(deferred.tmux_session, 'devsess:0');
       assert.equal(deferred.leader_pane_id, null);
+      assert.equal(deferred.orchestration_intent, 'pending-mailbox-review');
       assert.equal(deferred.tmux_injection_attempted, false);
 
       const nudgeStatePath = join(stateDir, 'team-leader-nudge.json');
       assert.ok(existsSync(nudgeStatePath), 'nudge state should still advance on deferred leader visibility');
       const nudgeState = JSON.parse(await readFile(nudgeStatePath, 'utf-8'));
       assert.ok(nudgeState.last_nudged_by_team?.[teamName]?.at);
+      assert.equal(nudgeState.last_nudged_by_team?.[teamName]?.orchestration_intent, 'pending-mailbox-review');
     });
   });
 
@@ -2536,6 +2545,7 @@ exit 0
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
       const sends = tmuxLog.match(/send-keys -t %98 -l \[OMX\] All 2 workers idle/g) || [];
       assert.equal(sends.length, 1, 'cooldown should keep repeated all-workers-idle leader nudges bounded');
+      assert.doesNotMatch(tmuxLog, /\[OMX_INTENT:/);
     });
   });
 

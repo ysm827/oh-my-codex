@@ -16,7 +16,7 @@ import { readTeamEvents, waitForTeamEvent } from './state/events.js';
 import { queueDirectMailboxMessage } from './mcp-comm.js';
 import { appendTeamDeliveryLogForCwd } from './delivery-log.js';
 import { resolveCanonicalTeamStateRoot } from './state-root.js';
-import { generateLeaderMailboxTriggerMessage, generateMailboxTriggerMessage } from './worker-bootstrap.js';
+import { buildLeaderMailboxTriggerDirective, buildMailboxTriggerDirective } from './worker-bootstrap.js';
 import {
   teamBroadcast as broadcastMessage,
   teamListMailbox as listMailboxMessages,
@@ -248,6 +248,12 @@ function summarizeEvent(event: TeamEvent | null): Record<string, unknown> | null
     task_id: event.task_id ?? null,
     created_at: event.created_at,
     reason: event.reason ?? null,
+    intent:
+      typeof event.intent === 'string'
+        ? event.intent
+        : typeof (event as Record<string, unknown>).orchestration_intent === 'string'
+          ? (event as Record<string, unknown>).orchestration_intent
+          : null,
     state: event.state ?? null,
     prev_state: event.prev_state ?? null,
     source_type: event.source_type ?? null,
@@ -547,9 +553,9 @@ export async function executeTeamApiOperation(
           return { ok: false, operation, error: { code: 'worker_not_found', message: `Worker ${toWorker} not found in team ${teamName}` } };
         }
 
-        const triggerMessage = toWorker === 'leader-fixed'
-          ? generateLeaderMailboxTriggerMessage(teamName, fromWorker)
-          : generateMailboxTriggerMessage(toWorker, teamName, 1);
+        const triggerDirective = toWorker === 'leader-fixed'
+          ? buildLeaderMailboxTriggerDirective(teamName, fromWorker)
+          : buildMailboxTriggerDirective(toWorker, teamName, 1);
 
         const livePaneId = toWorker === 'leader-fixed'
           ? config.leader_pane_id ?? undefined
@@ -568,7 +574,8 @@ export async function executeTeamApiOperation(
             toWorkerIndex: recipient?.index,
             toPaneId: livePaneId,
             body,
-            triggerMessage,
+            triggerMessage: triggerDirective.text,
+            intent: triggerDirective.intent,
             cwd,
             transportPreference: 'hook_preferred_with_fallback',
             fallbackAllowed: true,

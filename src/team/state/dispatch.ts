@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { getDefaultBridge, isBridgeEnabled, resolveBridgeStateDir, type DispatchRecord, type RuntimeCommand } from '../../runtime/bridge.js';
 import { appendTeamDeliveryLogForCwd } from '../delivery-log.js';
+import { isTeamReminderIntent, type TeamReminderIntent } from '../reminder-intents.js';
 import {
   canTransitionTeamDispatchRequestStatus,
   isTeamDispatchRequestStatus,
@@ -18,6 +19,7 @@ export interface TeamDispatchRequest {
   worker_index?: number;
   pane_id?: string;
   trigger_message: string;
+  intent?: TeamReminderIntent;
   message_id?: string;
   inbox_correlation_key?: string;
   transport_preference: TeamDispatchTransportPreference;
@@ -38,6 +40,7 @@ export interface TeamDispatchRequestInput {
   worker_index?: number;
   pane_id?: string;
   trigger_message: string;
+  intent?: TeamReminderIntent;
   message_id?: string;
   inbox_correlation_key?: string;
   transport_preference?: TeamDispatchTransportPreference;
@@ -104,6 +107,7 @@ export function normalizeDispatchRequest(
     worker_index: typeof raw.worker_index === 'number' ? raw.worker_index : undefined,
     pane_id: typeof raw.pane_id === 'string' && raw.pane_id !== '' ? raw.pane_id : undefined,
     trigger_message: raw.trigger_message,
+    intent: isTeamReminderIntent(raw.intent) ? raw.intent : undefined,
     message_id: typeof raw.message_id === 'string' && raw.message_id !== '' ? raw.message_id : undefined,
     inbox_correlation_key:
       typeof raw.inbox_correlation_key === 'string' && raw.inbox_correlation_key !== '' ? raw.inbox_correlation_key : undefined,
@@ -151,6 +155,7 @@ function buildDispatchMetadata(teamName: string, requestInput: TeamDispatchReque
     worker_index: requestInput.worker_index,
     pane_id: requestInput.pane_id,
     trigger_message: requestInput.trigger_message,
+    intent: requestInput.intent,
     message_id: requestInput.message_id,
     inbox_correlation_key: requestInput.inbox_correlation_key,
     transport_preference: requestInput.transport_preference,
@@ -200,6 +205,7 @@ export function normalizeBridgeDispatchRecord(
         typeof metadata.trigger_message === 'string' && metadata.trigger_message.trim() !== ''
           ? metadata.trigger_message
           : record.reason ?? record.request_id,
+      intent: isTeamReminderIntent(metadata.intent) ? metadata.intent : undefined,
       message_id: typeof metadata.message_id === 'string' && metadata.message_id !== '' ? metadata.message_id : undefined,
       inbox_correlation_key:
         typeof metadata.inbox_correlation_key === 'string' && metadata.inbox_correlation_key !== ''
@@ -282,6 +288,7 @@ export async function enqueueDispatchRequest(
       message_id: queued.request.message_id,
       to_worker: queued.request.to_worker,
       dispatch_kind: queued.request.kind,
+      intent: queued.request.intent,
       transport: queued.request.transport_preference,
       result: 'queued',
       storage: queued.queuedTransport,

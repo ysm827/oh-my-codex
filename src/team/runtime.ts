@@ -74,6 +74,7 @@ import {
   type TeamWorkerIntegrationState,
   type TeamGovernance,
   type TeamPolicy,
+  type TeamDispatchRequest,
 } from './team-ops.js';
 import {
   queueInboxInstruction,
@@ -83,6 +84,7 @@ import {
   type DispatchOutcome,
 } from './mcp-comm.js';
 import { appendTeamDeliveryLogForCwd } from './delivery-log.js';
+import type { TeamReminderIntent } from './reminder-intents.js';
 import {
   generateWorkerOverlay,
   writeTeamWorkerInstructionsFile,
@@ -92,9 +94,9 @@ import {
   generateInitialInbox,
   generateTaskAssignmentInbox,
   generateShutdownInbox,
-  generateTriggerMessage,
-  generateMailboxTriggerMessage,
-  generateLeaderMailboxTriggerMessage,
+  buildTriggerDirective,
+  buildMailboxTriggerDirective,
+  buildLeaderMailboxTriggerDirective,
   writeWorkerRoleInstructionsFile,
 } from './worker-bootstrap.js';
 import { loadRolePrompt } from './role-router.js';
@@ -273,10 +275,11 @@ async function logRuntimeDispatchOutcome(params: {
   workerName: string;
   requestId?: string;
   messageId?: string;
+  intent?: TeamDispatchRequest['intent'];
   outcome: DispatchOutcome;
   source?: string;
 }): Promise<void> {
-  const { cwd, teamName, workerName, requestId, messageId, outcome, source = 'team.runtime' } = params;
+  const { cwd, teamName, workerName, requestId, messageId, intent, outcome, source = 'team.runtime' } = params;
   await appendTeamDeliveryLogForCwd(cwd, {
     event: 'dispatch_result',
     source,
@@ -284,6 +287,7 @@ async function logRuntimeDispatchOutcome(params: {
     request_id: requestId,
     message_id: messageId,
     to_worker: workerName,
+    intent,
     transport: outcome.transport,
     result: outcome.ok ? 'confirmed' : 'failed',
     reason: outcome.reason,
@@ -1837,6 +1841,7 @@ export async function startTeam(
       instructionsFilePath: string;
       inbox: string;
       trigger: string;
+      triggerIntent: TeamReminderIntent;
       initialPrompt?: string;
       workerLaunchArgs: string[];
       workerCli: TeamWorkerCli;
@@ -1887,11 +1892,12 @@ export async function startTeam(
         rolePromptContent: rawRolePromptContent ?? undefined,
         worktreeRootAgentsCanonical: Boolean(workerWorkspace.worktreePath),
       });
-      const trigger = generateTriggerMessage(
+      const triggerDirective = buildTriggerDirective(
         workerName,
         sanitized,
         resolveInstructionStateRoot(workerWorkspace.worktreePath),
       );
+      const trigger = triggerDirective.text;
       const initialPrompt = workerCliPlan[i - 1] === 'gemini' ? trigger : undefined;
       if (initialPrompt) {
         await writeWorkerInbox(sanitized, workerName, inbox, leaderCwd);
@@ -1905,6 +1911,7 @@ export async function startTeam(
         instructionsFilePath,
         inbox,
         trigger,
+        triggerIntent: triggerDirective.intent,
         initialPrompt,
         workerLaunchArgs,
         workerCli: workerCliPlan[i - 1],
@@ -1979,13 +1986,14 @@ export async function startTeam(
       if (!bootstrapPlan) {
         throw new Error(`missing bootstrap plan for worker-${i}`);
       }
-      const { workerName, paneId, workerTasks, workerRole, inbox, trigger, initialPrompt } = {
+      const { workerName, paneId, workerTasks, workerRole, inbox, trigger, triggerIntent, initialPrompt } = {
         workerName: bootstrapPlan.workerName,
         paneId: workerPaneIds[i - 1],
         workerTasks: bootstrapPlan.workerTasks,
         workerRole: bootstrapPlan.workerRole,
         inbox: bootstrapPlan.inbox,
         trigger: bootstrapPlan.trigger,
+        triggerIntent: bootstrapPlan.triggerIntent,
         initialPrompt: bootstrapPlan.initialPrompt,
       };
       const workerWorkspace = bootstrapPlan.workerWorkspace;
@@ -2060,6 +2068,7 @@ export async function startTeam(
             workerCli: workerCliPlan[i - 1],
             inbox,
             triggerMessage: trigger,
+            intent: triggerIntent,
             cwd: leaderCwd,
             dispatchPolicy,
             inboxCorrelationKey: `startup:${workerName}`,
@@ -2509,6 +2518,11 @@ export async function assignTask(
     const maxAssignRetries = 2;
     const assignRetryDelayS = 2;
     let outcome: DispatchOutcome = { ok: false, transport: 'none', reason: 'not_attempted' };
+    const triggerDirective = buildTriggerDirective(
+      workerName,
+      sanitized,
+      resolveInstructionStateRoot(workerInfo.worktree_path),
+    );
     for (let attempt = 1; attempt <= maxAssignRetries; attempt++) {
       outcome = await dispatchCriticalInboxInstruction({
         teamName: sanitized,
@@ -2517,11 +2531,8 @@ export async function assignTask(
         workerIndex: workerInfo.index,
         paneId: workerInfo.pane_id,
         inbox,
-        triggerMessage: generateTriggerMessage(
-          workerName,
-          sanitized,
-          resolveInstructionStateRoot(workerInfo.worktree_path),
-        ),
+        triggerMessage: triggerDirective.text,
+        intent: triggerDirective.intent,
         cwd,
         dispatchPolicy,
         inboxCorrelationKey: `assign:${taskId}:${workerName}`,
@@ -2658,6 +2669,11 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
       const requestedAt = new Date().toISOString();
       await writeShutdownRequest(sanitized, w.name, 'leader-fixed', cwd);
       shutdownRequestTimes.set(w.name, requestedAt);
+      const triggerDirective = buildTriggerDirective(
+        w.name,
+        sanitized,
+        resolveInstructionStateRoot(w.worktree_path),
+      );
       await dispatchCriticalInboxInstruction({
         teamName: sanitized,
         config,
@@ -2665,11 +2681,8 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
         workerIndex: w.index,
         paneId: w.pane_id,
         inbox: generateShutdownInbox(sanitized, w.name),
-        triggerMessage: generateTriggerMessage(
-          w.name,
-          sanitized,
-          resolveInstructionStateRoot(w.worktree_path),
-        ),
+        triggerMessage: triggerDirective.text,
+        intent: triggerDirective.intent,
         cwd,
         dispatchPolicy,
         inboxCorrelationKey: `shutdown:${w.name}`,
@@ -3169,6 +3182,7 @@ async function dispatchCriticalInboxInstruction(params: {
   workerCli?: TeamWorkerCli;
   inbox: string;
   triggerMessage: string;
+  intent?: TeamReminderIntent;
   cwd: string;
   dispatchPolicy: TeamPolicy;
   inboxCorrelationKey: string;
@@ -3183,6 +3197,7 @@ async function dispatchCriticalInboxInstruction(params: {
     workerCli,
     inbox,
     triggerMessage,
+    intent,
     cwd,
     dispatchPolicy,
     inboxCorrelationKey,
@@ -3197,6 +3212,7 @@ async function dispatchCriticalInboxInstruction(params: {
       paneId,
       inbox,
       triggerMessage,
+      intent,
       cwd,
       transportPreference: 'prompt_stdin',
       fallbackAllowed: false,
@@ -3213,6 +3229,7 @@ async function dispatchCriticalInboxInstruction(params: {
       paneId,
       inbox,
       triggerMessage,
+      intent,
       cwd,
       transportPreference: 'transport_direct',
       fallbackAllowed: false,
@@ -3228,6 +3245,7 @@ async function dispatchCriticalInboxInstruction(params: {
     paneId,
     inbox,
     triggerMessage,
+    intent,
     cwd,
     transportPreference: 'hook_preferred_with_fallback',
     fallbackAllowed: true,
@@ -3361,6 +3379,7 @@ async function finalizeHookPreferredMailboxDispatch(params: {
   paneId?: string;
   messageId: string;
   triggerMessage: string;
+  intent?: TeamDispatchRequest['intent'];
   config: TeamConfig;
   dispatchPolicy: TeamPolicy;
   cwd: string;
@@ -3374,6 +3393,7 @@ async function finalizeHookPreferredMailboxDispatch(params: {
     paneId,
     messageId,
     triggerMessage,
+    intent,
     config,
     dispatchPolicy,
     cwd,
@@ -3386,7 +3406,7 @@ async function finalizeHookPreferredMailboxDispatch(params: {
   if (receipt && (receipt.status === 'notified' || receipt.status === 'delivered')) {
     await markMessageNotified(teamName, workerName, messageId, cwd).catch(() => false);
     const outcome = { ok: true, transport: 'hook', reason: `hook_receipt_${receipt.status}`, request_id: requestId, message_id: messageId } as const;
-    await logRuntimeDispatchOutcome({ cwd, teamName, workerName, requestId, messageId, outcome });
+    await logRuntimeDispatchOutcome({ cwd, teamName, workerName, requestId, messageId, intent, outcome });
     return outcome;
   }
 
@@ -3413,7 +3433,7 @@ async function finalizeHookPreferredMailboxDispatch(params: {
         request_id: requestId,
         message_id: messageId,
       } as const;
-      await logRuntimeDispatchOutcome({ cwd, teamName, workerName, requestId, messageId, outcome });
+      await logRuntimeDispatchOutcome({ cwd, teamName, workerName, requestId, messageId, intent, outcome });
       return outcome;
     }
     await transitionDispatchRequest(
@@ -3431,7 +3451,7 @@ async function finalizeHookPreferredMailboxDispatch(params: {
       request_id: requestId,
       message_id: messageId,
     } as const;
-    await logRuntimeDispatchOutcome({ cwd, teamName, workerName, requestId, messageId, outcome });
+    await logRuntimeDispatchOutcome({ cwd, teamName, workerName, requestId, messageId, intent, outcome });
     return outcome;
   }
 
@@ -3450,7 +3470,7 @@ async function finalizeHookPreferredMailboxDispatch(params: {
         request_id: requestId,
         message_id: messageId,
       } as const;
-      await logRuntimeDispatchOutcome({ cwd, teamName, workerName, requestId, messageId, outcome });
+      await logRuntimeDispatchOutcome({ cwd, teamName, workerName, requestId, messageId, intent, outcome });
       return outcome;
     }
 
@@ -3478,7 +3498,7 @@ async function finalizeHookPreferredMailboxDispatch(params: {
       request_id: requestId,
       message_id: messageId,
     } as const;
-    await logRuntimeDispatchOutcome({ cwd, teamName, workerName, requestId, messageId, outcome });
+    await logRuntimeDispatchOutcome({ cwd, teamName, workerName, requestId, messageId, intent, outcome });
     return outcome;
   }
 
@@ -3500,7 +3520,7 @@ async function finalizeHookPreferredMailboxDispatch(params: {
     request_id: requestId,
     message_id: messageId,
   } as const;
-  await logRuntimeDispatchOutcome({ cwd, teamName, workerName, requestId, messageId, outcome });
+  await logRuntimeDispatchOutcome({ cwd, teamName, workerName, requestId, messageId, intent, outcome });
   return outcome;
 }
 
@@ -3611,7 +3631,7 @@ async function dispatchPendingMailboxMessage(params: {
   cwd: string;
 }): Promise<DispatchOutcome> {
   const { teamName, workerName, workerInfo, messageId, config, dispatchPolicy, cwd } = params;
-  const triggerMessage = generateMailboxTriggerMessage(
+  const triggerDirective = buildMailboxTriggerDirective(
     workerName,
     teamName,
     1,
@@ -3625,7 +3645,8 @@ async function dispatchPendingMailboxMessage(params: {
       to_worker: workerName,
       worker_index: workerInfo.index,
       pane_id: workerInfo.pane_id,
-      trigger_message: triggerMessage,
+      trigger_message: triggerDirective.text,
+      intent: triggerDirective.intent,
       message_id: messageId,
       transport_preference: transportPreference,
       fallback_allowed: transportPreference === 'hook_preferred_with_fallback',
@@ -3648,14 +3669,15 @@ async function dispatchPendingMailboxMessage(params: {
       workerIndex: workerInfo.index,
       paneId: workerInfo.pane_id,
       messageId,
-      triggerMessage,
+      triggerMessage: triggerDirective.text,
+      intent: triggerDirective.intent,
       config,
       dispatchPolicy,
       cwd,
     });
   }
 
-  const direct = await notifyWorkerOutcome(config, workerInfo.index, triggerMessage, workerInfo.pane_id);
+  const direct = await notifyWorkerOutcome(config, workerInfo.index, triggerDirective.text, workerInfo.pane_id);
   const outcome: DispatchOutcome = { ...direct, request_id: queued.request.request_id, message_id: messageId };
   if (outcome.ok) {
     await markMessageNotified(teamName, workerName, messageId, cwd).catch(() => false);
@@ -3686,6 +3708,7 @@ async function finalizeQueuedMailboxDispatch(params: {
   paneId?: string;
   messageId?: string;
   triggerMessage: string;
+  intent?: TeamDispatchRequest['intent'];
   config: TeamConfig;
   dispatchPolicy: TeamPolicy;
   cwd: string;
@@ -3700,6 +3723,7 @@ async function finalizeQueuedMailboxDispatch(params: {
     paneId,
     messageId,
     triggerMessage,
+    intent,
     config,
     dispatchPolicy,
     cwd,
@@ -3724,6 +3748,7 @@ async function finalizeQueuedMailboxDispatch(params: {
     paneId,
     messageId,
     triggerMessage,
+    intent,
     config,
     dispatchPolicy,
     cwd,
@@ -3740,7 +3765,7 @@ async function sendLeaderMailboxMessage(params: {
   cwd: string;
 }): Promise<DispatchOutcome> {
   const { teamName, fromWorker, body, config, dispatchPolicy, cwd } = params;
-  const triggerMessage = generateLeaderMailboxTriggerMessage(teamName, fromWorker);
+  const triggerDirective = buildLeaderMailboxTriggerDirective(teamName, fromWorker);
   const transportPreference = resolveLeaderMailboxTransportPreference(dispatchPolicy);
   const queuedOutcome = await queueDirectMailboxMessage({
     teamName,
@@ -3748,7 +3773,8 @@ async function sendLeaderMailboxMessage(params: {
     toWorker: 'leader-fixed',
     toPaneId: config.leader_pane_id ?? undefined,
     body,
-    triggerMessage,
+    triggerMessage: triggerDirective.text,
+    intent: triggerDirective.intent,
     cwd,
     transportPreference,
     fallbackAllowed: transportPreference === 'hook_preferred_with_fallback',
@@ -3784,6 +3810,7 @@ async function sendLeaderMailboxMessage(params: {
       workerName: 'leader-fixed',
       requestId: deferredOutcome.request_id,
       messageId: deferredOutcome.message_id,
+      intent: triggerDirective.intent,
       outcome: deferredOutcome,
     });
     return deferredOutcome;
@@ -3797,11 +3824,12 @@ async function sendLeaderMailboxMessage(params: {
     workerName: 'leader-fixed',
     paneId: config.leader_pane_id ?? undefined,
     messageId: queuedOutcome.message_id,
-    triggerMessage,
+    triggerMessage: triggerDirective.text,
+    intent: triggerDirective.intent,
     config,
     dispatchPolicy,
     cwd,
-    fallbackNotify: async () => await notifyLeaderAsync(config, triggerMessage, cwd),
+    fallbackNotify: async () => await notifyLeaderAsync(config, triggerDirective.text, cwd),
   });
 }
 
@@ -3818,7 +3846,7 @@ async function sendRecipientMailboxMessage(params: {
   const recipient = config.workers.find((worker) => worker.name === toWorker);
   if (!recipient) throw new Error(`Worker ${toWorker} not found in team`);
 
-  const triggerMessage = generateMailboxTriggerMessage(
+  const triggerDirective = buildMailboxTriggerDirective(
     toWorker,
     teamName,
     1,
@@ -3832,7 +3860,8 @@ async function sendRecipientMailboxMessage(params: {
     toWorkerIndex: recipient.index,
     toPaneId: recipient.pane_id,
     body,
-    triggerMessage,
+    triggerMessage: triggerDirective.text,
+    intent: triggerDirective.intent,
     cwd,
     transportPreference,
     fallbackAllowed: transportPreference === 'hook_preferred_with_fallback',
@@ -3851,7 +3880,8 @@ async function sendRecipientMailboxMessage(params: {
     workerIndex: recipient.index,
     paneId: recipient.pane_id,
     messageId: queuedOutcome.message_id,
-    triggerMessage,
+    triggerMessage: triggerDirective.text,
+    intent: triggerDirective.intent,
     config,
     dispatchPolicy,
     cwd,
@@ -3880,6 +3910,12 @@ async function finalizeBroadcastMailboxOutcomes(params: {
       finalizedOutcomes.push({ ...outcome, ok: false, reason: 'missing_worker_index' });
       continue;
     }
+    const triggerDirective = buildMailboxTriggerDirective(
+      target.name,
+      teamName,
+      1,
+      resolveInstructionStateRoot(target.worktree_path),
+    );
     finalizedOutcomes.push(await finalizeQueuedMailboxDispatch({
       queuedOutcome: outcome,
       transportPreference,
@@ -3888,12 +3924,8 @@ async function finalizeBroadcastMailboxOutcomes(params: {
       workerIndex: target.index,
       paneId: target.pane_id,
       messageId: outcome.message_id,
-      triggerMessage: generateMailboxTriggerMessage(
-        target.name,
-        teamName,
-        1,
-        resolveInstructionStateRoot(target.worktree_path),
-      ),
+      triggerMessage: triggerDirective.text,
+      intent: triggerDirective.intent,
       config,
       dispatchPolicy,
       cwd,
@@ -3961,12 +3993,13 @@ export async function broadcastWorkerMessage(
     recipients: config.workers.map((w) => ({ workerName: w.name, workerIndex: w.index, paneId: w.pane_id })),
     body,
     cwd,
-    triggerFor: (workerName) => generateMailboxTriggerMessage(
+    triggerFor: (workerName) => buildMailboxTriggerDirective(
       workerName,
       sanitized,
       1,
       resolveInstructionStateRoot(config.workers.find((worker) => worker.name === workerName)?.worktree_path),
-    ),
+    ).text,
+    intentFor: () => 'pending-mailbox-review',
     transportPreference,
     fallbackAllowed: transportPreference === 'hook_preferred_with_fallback',
     notify: async (target, message) =>

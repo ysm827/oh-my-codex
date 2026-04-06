@@ -239,6 +239,14 @@ describe('notify-hook/auto-nudge – detectStallPattern', () => {
     assert.equal(detectStallPattern(text, DEFAULT_STALL_PATTERNS), false);
   });
 
+  it('ignores orchestration intent tags when normalizing stall text', async () => {
+    const { normalizeAutoNudgeSignatureText } = await loadModule('notify-hook/auto-nudge.js');
+    assert.equal(
+      normalizeAutoNudgeSignatureText('Team alpha: 1 msg(s) for leader. [OMX_INTENT:pending-mailbox-review]'),
+      'team alpha 1 msg s for leader',
+    );
+  });
+
   it('focuses detection on the last few lines (hotZone)', async () => {
     const { detectStallPattern, DEFAULT_STALL_PATTERNS } = await loadModule('notify-hook/auto-nudge.js');
     // Stall phrase only in the last line — should detect
@@ -412,6 +420,37 @@ describe('notify-hook/auto-nudge – blocked deep-interview auto approvals', () 
       latestUserInput: 'abort',
       lastMessage: 'Stopping now.',
     }), 'abort');
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// orchestration-intent.js – team reminder taxonomy
+// ---------------------------------------------------------------------------
+describe('notify-hook/orchestration-intent – taxonomy helpers', () => {
+  it('appends and strips orchestration intent tags', async () => {
+    const { appendOrchestrationIntentTag, stripOrchestrationIntentTags } = await loadModule('notify-hook/orchestration-intent.js');
+    const tagged = appendOrchestrationIntentTag('Team alpha: 1 msg(s) for leader.', 'pending-mailbox-review');
+    assert.equal(tagged, 'Team alpha: 1 msg(s) for leader. [OMX_INTENT:pending-mailbox-review]');
+    assert.equal(stripOrchestrationIntentTags(tagged).trim(), 'Team alpha: 1 msg(s) for leader.');
+  });
+
+  it('maps leader reminder reasons to stable orchestration intents', async () => {
+    const { resolveLeaderNudgeIntent } = await loadModule('notify-hook/orchestration-intent.js');
+    assert.equal(resolveLeaderNudgeIntent({ nudgeReason: 'new_mailbox_message' }), 'pending-mailbox-review');
+    assert.equal(resolveLeaderNudgeIntent({ nudgeReason: 'ack_without_start_evidence' }), 'followup-relaunch');
+    assert.equal(resolveLeaderNudgeIntent({ nudgeReason: 'stuck_waiting_on_leader' }), 'stalled-unblock');
+    assert.equal(resolveLeaderNudgeIntent({ nudgeReason: 'all_workers_idle', leaderActionState: 'done_waiting_on_leader' }), 'done-review-or-shutdown');
+    assert.equal(resolveLeaderNudgeIntent({ nudgeReason: 'all_workers_idle', leaderActionState: 'still_actionable' }), 'followup-reuse');
+  });
+
+  it('maps worker-state reminders to stable orchestration intents', async () => {
+    const { resolveAllWorkersIdleIntent, resolveWorkerIdleIntent } = await loadModule('notify-hook/orchestration-intent.js');
+    assert.equal(resolveAllWorkersIdleIntent('done_waiting_on_leader'), 'done-review-or-shutdown');
+    assert.equal(resolveAllWorkersIdleIntent('stuck_waiting_on_leader'), 'stalled-unblock');
+    assert.equal(resolveAllWorkersIdleIntent('still_actionable'), 'followup-reuse');
+    assert.equal(resolveWorkerIdleIntent('idle'), 'followup-reuse');
+    assert.equal(resolveWorkerIdleIntent('done'), 'done-review-or-shutdown');
   });
 });
 

@@ -51,7 +51,7 @@ import {
 } from './mcp-comm.js';
 import {
   generateInitialInbox,
-  generateTriggerMessage,
+  buildTriggerDirective,
   writeWorkerRoleInstructionsFile,
   writeWorkerWorktreeRootAgentsFile,
   removeWorkerWorktreeRootAgentsFile,
@@ -468,7 +468,7 @@ export async function scaleUp(
         worktreeRootAgentsCanonical: Boolean(workerWorkspace?.worktreePath),
       });
 
-      const trigger = generateTriggerMessage(
+      const triggerDirective = buildTriggerDirective(
         workerName,
         sanitized,
         resolveInstructionStateRoot(workerInfo.worktree_path),
@@ -479,7 +479,8 @@ export async function scaleUp(
         workerIndex,
         paneId,
         inbox,
-        triggerMessage: trigger,
+        triggerMessage: triggerDirective.text,
+        intent: triggerDirective.intent,
         cwd: leaderCwd,
         transportPreference: dispatchPolicy.dispatch_mode,
         fallbackAllowed: true,
@@ -500,7 +501,7 @@ export async function scaleUp(
         if (receipt && (receipt.status === 'notified' || receipt.status === 'delivered')) {
           outcome = { ok: true, transport: 'hook', reason: `hook_receipt_${receipt.status}`, request_id: queued.request_id };
         } else {
-          const fallback = await notifyWorkerPaneOutcome(sessionName, workerIndex, trigger, paneId, workerCliPlan[i]);
+          const fallback = await notifyWorkerPaneOutcome(sessionName, workerIndex, triggerDirective.text, paneId, workerCliPlan[i]);
           if (receipt?.status === 'failed') {
             if (fallback.ok) {
               await transitionDispatchRequest(
@@ -580,7 +581,7 @@ export async function scaleUp(
       // Retry dispatch once if a trust prompt is blocking the worker pane (fixes #393).
       if (!outcome.ok && dismissTrustPromptIfPresent(sessionName, workerIndex, paneId)) {
         waitForWorkerReady(sessionName, workerIndex, readyTimeoutMs, paneId);
-        const retry = await notifyWorkerPaneOutcome(sessionName, workerIndex, trigger, paneId, workerCliPlan[i]);
+        const retry = await notifyWorkerPaneOutcome(sessionName, workerIndex, triggerDirective.text, paneId, workerCliPlan[i]);
         if (retry.ok) {
           outcome = retry;
         }

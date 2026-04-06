@@ -1,5 +1,6 @@
 import type { TeamPhase, TerminalPhase } from '../orchestrator.js';
 import type { TeamDispatchRequestStatus, TeamEventType, TeamTaskStatus } from '../contracts.js';
+import type { TeamReminderIntent } from '../reminder-intents.js';
 import type { WorktreeMode } from '../worktree.js';
 
 export interface TeamConfig {
@@ -121,6 +122,7 @@ export interface TeamDispatchRequest {
   worker_index?: number;
   pane_id?: string;
   trigger_message: string;
+  intent?: TeamReminderIntent;
   message_id?: string;
   inbox_correlation_key?: string;
   transport_preference: TeamDispatchTransportPreference;
@@ -141,6 +143,7 @@ export interface TeamDispatchRequestInput {
   worker_index?: number;
   pane_id?: string;
   trigger_message: string;
+  intent?: TeamReminderIntent;
   message_id?: string;
   inbox_correlation_key?: string;
   transport_preference?: TeamDispatchTransportPreference;
@@ -194,6 +197,7 @@ export interface TeamEvent {
   task_id?: string;
   message_id?: string | null;
   reason?: string;
+  intent?: TeamReminderIntent;
   state?: WorkerStatus['state'];
   prev_state?: WorkerStatus['state'];
   worker_count?: number;

@@ -12,6 +12,10 @@ import { runProcess } from './process-runner.js';
 import { logTmuxHookEvent } from './log.js';
 import { evaluatePaneInjectionReadiness, sendPaneInput } from './team-tmux-guard.js';
 import { resolvePaneTarget } from './tmux-injection.js';
+import {
+  classifyLeaderActionState,
+  resolveLeaderNudgeIntent,
+} from './orchestration-intent.js';
 import { DEFAULT_MARKER } from '../tmux-hook-engine.js';
 import { isLeaderRuntimeStale } from '../../team/leader-activity.js';
 import { appendTeamDeliveryLog } from '../../team/delivery-log.js';
@@ -80,27 +84,6 @@ function buildMailboxCheckReminder(teamName) {
 
 function buildWorkerStartEvidenceReminder(teamName, workerName) {
   return `Next: check ${workerName} msg/output, confirm task in omx team status ${teamName}, then reassign/nudge.`;
-}
-
-function classifyLeaderActionState({
-  allWorkersIdle = false,
-  workerPanesAlive = false,
-  taskCounts = {},
-  teamProgressStalled = false,
-} = {}) {
-  const pending = Number.isFinite(taskCounts.pending) ? taskCounts.pending : 0;
-  const blocked = Number.isFinite(taskCounts.blocked) ? taskCounts.blocked : 0;
-  const inProgress = Number.isFinite(taskCounts.in_progress) ? taskCounts.in_progress : 0;
-  const tasksComplete = pending === 0 && blocked === 0 && inProgress === 0;
-  const pendingFollowUpTasks = allWorkersIdle && pending > 0 && blocked === 0 && inProgress === 0;
-  const blockedWaitingOnLeader = allWorkersIdle && blocked > 0 && pending === 0 && inProgress === 0;
-  const terminalWaitingOnLeader = allWorkersIdle && tasksComplete && workerPanesAlive;
-  const stalledWaitingOnLeader = blockedWaitingOnLeader || teamProgressStalled;
-
-  if (terminalWaitingOnLeader) return 'done_waiting_on_leader';
-  if (stalledWaitingOnLeader) return 'stuck_waiting_on_leader';
-  if (pendingFollowUpTasks) return 'still_actionable';
-  return 'still_actionable';
 }
 
 function buildLeaderActionGuidance(teamName) {
@@ -476,7 +459,7 @@ async function getAckWithoutStartEvidence(stateDir, teamName, msg) {
   };
 }
 
-export async function emitTeamNudgeEvent(cwd, teamName, reason, nowIso) {
+export async function emitTeamNudgeEvent(cwd, teamName, reason, orchestrationIntent, nowIso) {
   const eventsDir = join(cwd, '.omx', 'state', 'team', teamName, 'events');
   const eventsPath = join(eventsDir, 'events.ndjson');
   try {
@@ -487,6 +470,7 @@ export async function emitTeamNudgeEvent(cwd, teamName, reason, nowIso) {
       type: 'team_leader_nudge',
       worker: 'leader-fixed',
       reason,
+      orchestration_intent: orchestrationIntent,
       created_at: nowIso,
     };
     await appendFile(eventsPath, JSON.stringify(event) + '\n');
@@ -495,7 +479,7 @@ export async function emitTeamNudgeEvent(cwd, teamName, reason, nowIso) {
   }
 }
 
-async function emitLeaderNudgeDeferredEvent(cwd, teamName, reason, nowIso, { tmuxSession = '', leaderPaneId = '', paneCurrentCommand = '', sourceType = 'leader_nudge' } = {}) {
+async function emitLeaderNudgeDeferredEvent(cwd, teamName, reason, orchestrationIntent, nowIso, { tmuxSession = '', leaderPaneId = '', paneCurrentCommand = '', sourceType = 'leader_nudge' } = {}) {
   const eventsDir = join(cwd, '.omx', 'state', 'team', teamName, 'events');
   const eventsPath = join(eventsDir, 'events.ndjson');
   try {
@@ -510,6 +494,7 @@ async function emitLeaderNudgeDeferredEvent(cwd, teamName, reason, nowIso, { tmu
       created_at: nowIso,
       tmux_session: tmuxSession || null,
       leader_pane_id: leaderPaneId || null,
+      orchestration_intent: orchestrationIntent,
       tmux_injection_attempted: false,
       pane_current_command: paneCurrentCommand || null,
       source_type: sourceType,
@@ -761,15 +746,25 @@ export async function maybeNudgeTeamLeader({
     } else {
       continue;
     }
+    const orchestrationIntent = resolveLeaderNudgeIntent({ nudgeReason, leaderActionState });
     const capped = text.length > 180 ? `${text.slice(0, 177)}...` : text;
     const markedText = `${capped} ${DEFAULT_MARKER}`;
 
     if (!tmuxTarget) {
-      nudgeState.last_nudged_by_team[teamName] = { at: nowIso, last_message_id: newestId || prevMsgId || '', reason: nudgeReason };
+      nudgeState.last_nudged_by_team[teamName] = {
+        at: nowIso,
+        last_message_id: newestId || prevMsgId || '',
+        reason: nudgeReason,
+        orchestration_intent: orchestrationIntent,
+      };
       if (shouldSendAllIdleNudge) {
-        nudgeState.last_idle_nudged_by_team[teamName] = { at: nowIso, worker_count: workerNames.length };
+        nudgeState.last_idle_nudged_by_team[teamName] = {
+          at: nowIso,
+          worker_count: workerNames.length,
+          orchestration_intent: orchestrationIntent,
+        };
       }
-      await emitLeaderNudgeDeferredEvent(cwd, teamName, LEADER_PANE_MISSING_NO_INJECTION_REASON, nowIso, {
+      await emitLeaderNudgeDeferredEvent(cwd, teamName, LEADER_PANE_MISSING_NO_INJECTION_REASON, orchestrationIntent, nowIso, {
         tmuxSession,
         leaderPaneId,
         sourceType: 'leader_nudge',
@@ -784,6 +779,7 @@ export async function maybeNudgeTeamLeader({
           reason: LEADER_PANE_MISSING_NO_INJECTION_REASON,
           leader_pane_id: leaderPaneId || null,
           tmux_session: tmuxSession || null,
+          orchestration_intent: orchestrationIntent,
           tmux_injection_attempted: false,
           source_type: 'leader_nudge',
         });
@@ -796,6 +792,7 @@ export async function maybeNudgeTeamLeader({
         transport: 'none',
         result: 'deferred',
         reason: LEADER_PANE_MISSING_NO_INJECTION_REASON,
+        orchestration_intent: orchestrationIntent,
       }).catch(() => {});
       continue;
     }
@@ -812,11 +809,20 @@ export async function maybeNudgeTeamLeader({
       const deferredReason = paneGuard.reason === 'pane_running_shell'
         ? LEADER_PANE_SHELL_NO_INJECTION_REASON
         : paneGuard.reason;
-      nudgeState.last_nudged_by_team[teamName] = { at: nowIso, last_message_id: newestId || prevMsgId || '', reason: nudgeReason };
+      nudgeState.last_nudged_by_team[teamName] = {
+        at: nowIso,
+        last_message_id: newestId || prevMsgId || '',
+        reason: nudgeReason,
+        orchestration_intent: orchestrationIntent,
+      };
       if (shouldSendAllIdleNudge) {
-        nudgeState.last_idle_nudged_by_team[teamName] = { at: nowIso, worker_count: workerNames.length };
+        nudgeState.last_idle_nudged_by_team[teamName] = {
+          at: nowIso,
+          worker_count: workerNames.length,
+          orchestration_intent: orchestrationIntent,
+        };
       }
-      await emitLeaderNudgeDeferredEvent(cwd, teamName, deferredReason, nowIso, {
+      await emitLeaderNudgeDeferredEvent(cwd, teamName, deferredReason, orchestrationIntent, nowIso, {
         tmuxSession,
         leaderPaneId,
         paneCurrentCommand: paneGuard.paneCurrentCommand,
@@ -834,6 +840,7 @@ export async function maybeNudgeTeamLeader({
           tmux_session: tmuxSession || null,
           tmux_injection_attempted: false,
           pane_target: tmuxTarget,
+          orchestration_intent: orchestrationIntent,
           readiness_evidence: paneGuard.readinessEvidence || null,
           pane_current_command: paneGuard.paneCurrentCommand || null,
           injection_skip_reason: paneGuard.reason,
@@ -848,6 +855,7 @@ export async function maybeNudgeTeamLeader({
         transport: 'none',
         result: 'deferred',
         reason: deferredReason,
+        orchestration_intent: orchestrationIntent,
       }).catch(() => {});
       continue;
     }
@@ -862,12 +870,21 @@ export async function maybeNudgeTeamLeader({
       if (!sendResult.ok) {
         throw new Error(sendResult.error || sendResult.reason);
       }
-      nudgeState.last_nudged_by_team[teamName] = { at: nowIso, last_message_id: newestId || prevMsgId || '', reason: nudgeReason };
+      nudgeState.last_nudged_by_team[teamName] = {
+        at: nowIso,
+        last_message_id: newestId || prevMsgId || '',
+        reason: nudgeReason,
+        orchestration_intent: orchestrationIntent,
+      };
       if (shouldSendAllIdleNudge) {
-        nudgeState.last_idle_nudged_by_team[teamName] = { at: nowIso, worker_count: workerNames.length };
+        nudgeState.last_idle_nudged_by_team[teamName] = {
+          at: nowIso,
+          worker_count: workerNames.length,
+          orchestration_intent: orchestrationIntent,
+        };
       }
 
-      await emitTeamNudgeEvent(cwd, teamName, nudgeReason, nowIso);
+      await emitTeamNudgeEvent(cwd, teamName, nudgeReason, orchestrationIntent, nowIso);
 
       try {
         await logTmuxHookEvent(logsDir, {
@@ -876,6 +893,7 @@ export async function maybeNudgeTeamLeader({
           team: teamName,
           tmux_target: tmuxTarget,
           reason: nudgeReason,
+          orchestration_intent: orchestrationIntent,
           pane_count: paneStatus.paneCount,
           leader_stale: leaderStale,
           message_count: messages.length,
@@ -891,6 +909,7 @@ export async function maybeNudgeTeamLeader({
         transport: 'send-keys',
         result: 'sent',
         reason: nudgeReason,
+        orchestration_intent: orchestrationIntent,
       }).catch(() => {});
     } catch (err) {
       try {
@@ -900,6 +919,7 @@ export async function maybeNudgeTeamLeader({
           team: teamName,
           tmux_target: tmuxTarget,
           reason: nudgeReason,
+          orchestration_intent: orchestrationIntent,
           error: safeString(err && err.message ? err.message : err),
         });
       } catch { /* ignore */ }
@@ -911,6 +931,7 @@ export async function maybeNudgeTeamLeader({
         transport: 'send-keys',
         result: 'failed',
         reason: nudgeReason,
+        orchestration_intent: orchestrationIntent,
         error: safeString(err && err.message ? err.message : err),
       }).catch(() => {});
     }
