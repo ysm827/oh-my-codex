@@ -109,6 +109,7 @@ import {
   planWorktreeTarget,
   ensureWorktree,
 } from "../team/worktree.js";
+import { ensureReusableNodeModules } from "../utils/repo-deps.js";
 import {
   OMX_NOTIFY_TEMP_CONTRACT_ENV,
   parseNotifyTempContractFromArgs,
@@ -928,6 +929,12 @@ export async function launchWithHud(args: string[]): Promise<void> {
     const ensured = ensureWorktree(planned);
     if (ensured.enabled) {
       cwd = ensured.worktreePath;
+      const depBootstrap = ensureReusableNodeModules(cwd);
+      if (depBootstrap.strategy === "symlink") {
+        console.log(`[omx] Reusing node_modules from ${depBootstrap.sourceNodeModulesPath}`);
+      } else if (depBootstrap.strategy === "missing" && depBootstrap.warning) {
+        console.warn(`[omx] ${depBootstrap.warning}`);
+      }
     }
   }
   const sessionId = `omx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1014,6 +1021,12 @@ export async function execWithOverlay(args: string[]): Promise<void> {
     const ensured = ensureWorktree(planned);
     if (ensured.enabled) {
       cwd = ensured.worktreePath;
+      const depBootstrap = ensureReusableNodeModules(cwd);
+      if (depBootstrap.strategy === "symlink") {
+        console.log(`[omx] Reusing node_modules from ${depBootstrap.sourceNodeModulesPath}`);
+      } else if (depBootstrap.strategy === "missing" && depBootstrap.warning) {
+        console.warn(`[omx] ${depBootstrap.warning}`);
+      }
     }
   }
 

@@ -52,6 +52,7 @@ import {
   releaseTmuxExtendedKeysLease,
   withTmuxExtendedKeys,
 } from "../index.js";
+import { ensureReusableNodeModules } from "../../utils/repo-deps.js";
 import { readAllState } from "../../hud/state.js";
 import { generateOverlay } from "../../hooks/agents-overlay.js";
 import { HUD_TMUX_HEIGHT_LINES } from "../../hud/constants.js";
@@ -2026,6 +2027,16 @@ describe("buildDetachedTmuxSessionName", () => {
       "omx-1770992424158-abc123",
     );
     assert.equal(sessionName, "omx-my-repo-detached-1770992424158-abc123");
+  });
+});
+
+describe("worktree dependency bootstrap helpers", () => {
+  it("returns an explicit warning when reusable worktree dependencies are unavailable", () => {
+    const result = ensureReusableNodeModules("/tmp/non-worktree", {
+      gitRunner: () => ({ status: 1, stdout: "", stderr: "not a worktree" }) as any,
+    });
+    assert.equal(result.strategy, "missing");
+    assert.match(String(result.warning || ""), /No reusable parent-repo node_modules was found/);
   });
 });
 
