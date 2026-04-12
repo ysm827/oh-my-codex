@@ -4,10 +4,17 @@ import type { NotificationEvent, FullNotificationPayload } from './types.js';
 
 const SESSION_ID_SAFE_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/;
 const LIFECYCLE_DEDUPE_FILE = 'lifecycle-notif-state.json';
+const LIFECYCLE_DEDUPE_WINDOW_MS = 5_000;
 const DEDUPED_EVENTS = new Set<NotificationEvent>(['session-start', 'session-stop', 'session-end']);
 
+interface LifecycleDedupeEntry {
+  fingerprint?: string;
+  sentAt?: string;
+}
+
 interface LifecycleDedupeState {
-  events?: Record<string, { fingerprint?: string; sentAt?: string }>;
+  events?: Record<string, LifecycleDedupeEntry>;
+  hookEvents?: Record<string, LifecycleDedupeEntry>;
 }
 
 function normalizeFingerprint(payload: FullNotificationPayload): string {
@@ -50,30 +57,141 @@ export function shouldDedupeLifecycleNotification(event: NotificationEvent): boo
   return DEDUPED_EVENTS.has(event);
 }
 
+function stableSerialize(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableSerialize(item)).join(',')}]`;
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, nestedValue]) => nestedValue !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, nestedValue]) => `${JSON.stringify(key)}:${stableSerialize(nestedValue)}`);
+  return `{${entries.join(',')}}`;
+}
+
+function shouldSendFingerprint(
+  previous: LifecycleDedupeEntry | undefined,
+  fingerprint: string,
+  nowMs: number,
+): boolean {
+  if (!previous || previous.fingerprint !== fingerprint) return true;
+  if (!previous.sentAt) return false;
+
+  const previousMs = Date.parse(previous.sentAt);
+  if (!Number.isFinite(previousMs)) return false;
+  return nowMs - previousMs >= LIFECYCLE_DEDUPE_WINDOW_MS;
+}
+
+function shouldSendScopedLifecycleBroadcast(
+  stateDir: string,
+  sessionId: string | undefined,
+  bucket: 'events' | 'hookEvents',
+  eventKey: string,
+  fingerprint: string,
+  nowMs: number = Date.now(),
+): boolean {
+  if (!sessionId || !stateDir) return true;
+
+  const path = getStatePath(stateDir, sessionId);
+  const state = readState(path);
+  const bucketState = state[bucket] && typeof state[bucket] === 'object'
+    ? state[bucket]
+    : {};
+  return shouldSendFingerprint(bucketState?.[eventKey], fingerprint, nowMs);
+}
+
+function recordScopedLifecycleBroadcastSent(
+  stateDir: string,
+  sessionId: string | undefined,
+  bucket: 'events' | 'hookEvents',
+  eventKey: string,
+  fingerprint: string,
+  nowMs: number = Date.now(),
+): void {
+  if (!sessionId || !stateDir) return;
+
+  const path = getStatePath(stateDir, sessionId);
+  const state = readState(path);
+  const bucketState = state[bucket] && typeof state[bucket] === 'object'
+    ? state[bucket]
+    : {};
+  bucketState[eventKey] = {
+    fingerprint,
+    sentAt: new Date(nowMs).toISOString(),
+  };
+  state[bucket] = bucketState;
+  writeState(path, state);
+}
+
+export function createLifecycleBroadcastFingerprint(value: unknown): string {
+  return stableSerialize(value);
+}
+
 export function shouldSendLifecycleNotification(
   stateDir: string,
   payload: FullNotificationPayload,
+  nowMs: number = Date.now(),
 ): boolean {
   if (!shouldDedupeLifecycleNotification(payload.event)) return true;
-  if (!payload.sessionId || !stateDir) return true;
-  const path = getStatePath(stateDir, payload.sessionId);
-  const state = readState(path);
-  const previous = state.events?.[payload.event];
-  return previous?.fingerprint !== normalizeFingerprint(payload);
+  return shouldSendScopedLifecycleBroadcast(
+    stateDir,
+    payload.sessionId,
+    'events',
+    payload.event,
+    normalizeFingerprint(payload),
+    nowMs,
+  );
 }
 
 export function recordLifecycleNotificationSent(
   stateDir: string,
   payload: FullNotificationPayload,
+  nowMs: number = Date.now(),
 ): void {
   if (!shouldDedupeLifecycleNotification(payload.event)) return;
-  if (!payload.sessionId || !stateDir) return;
-  const path = getStatePath(stateDir, payload.sessionId);
-  const state = readState(path);
-  state.events = state.events && typeof state.events === 'object' ? state.events : {};
-  state.events[payload.event] = {
-    fingerprint: normalizeFingerprint(payload),
-    sentAt: new Date().toISOString(),
-  };
-  writeState(path, state);
+  recordScopedLifecycleBroadcastSent(
+    stateDir,
+    payload.sessionId,
+    'events',
+    payload.event,
+    normalizeFingerprint(payload),
+    nowMs,
+  );
+}
+
+export function shouldSendLifecycleHookBroadcast(
+  stateDir: string,
+  sessionId: string | undefined,
+  eventKey: string,
+  fingerprint: string,
+  nowMs: number = Date.now(),
+): boolean {
+  return shouldSendScopedLifecycleBroadcast(
+    stateDir,
+    sessionId,
+    'hookEvents',
+    eventKey,
+    fingerprint,
+    nowMs,
+  );
+}
+
+export function recordLifecycleHookBroadcastSent(
+  stateDir: string,
+  sessionId: string | undefined,
+  eventKey: string,
+  fingerprint: string,
+  nowMs: number = Date.now(),
+): void {
+  recordScopedLifecycleBroadcastSent(
+    stateDir,
+    sessionId,
+    'hookEvents',
+    eventKey,
+    fingerprint,
+    nowMs,
+  );
 }

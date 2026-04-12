@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import {
   shouldSendLifecycleNotification,
   recordLifecycleNotificationSent,
+  shouldSendLifecycleHookBroadcast,
+  recordLifecycleHookBroadcastSent,
 } from '../lifecycle-dedupe.js';
 import type { FullNotificationPayload } from '../types.js';
 
@@ -59,6 +61,44 @@ describe('lifecycle notification dedupe', () => {
 
       assert.equal(typeof state.events?.['session-start']?.fingerprint, 'string');
       assert.equal(shouldSendLifecycleNotification(stateDir, buildPayload({ sessionId: 'session-b', event: 'session-start' })), true);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it('re-emits the same lifecycle fingerprint after the dedupe window elapses', async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), 'omx-lifecycle-dedupe-window-'));
+    try {
+      const payload = buildPayload({ event: 'session-start' });
+      const startMs = Date.parse('2026-04-12T00:00:00.000Z');
+
+      recordLifecycleNotificationSent(stateDir, payload, startMs);
+
+      assert.equal(shouldSendLifecycleNotification(stateDir, payload, startMs + 4_999), false);
+      assert.equal(shouldSendLifecycleNotification(stateDir, payload, startMs + 5_000), true);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it('tracks hook dedupe separately from notification dedupe state', async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), 'omx-lifecycle-dedupe-hook-'));
+    try {
+      const payload = buildPayload({ event: 'session-start', sessionId: 'hook-session' });
+      const hookFingerprint = 'fp:keyword-detector:turn-1';
+
+      recordLifecycleNotificationSent(stateDir, payload);
+      assert.equal(
+        shouldSendLifecycleHookBroadcast(stateDir, payload.sessionId, 'keyword-detector', hookFingerprint),
+        true,
+      );
+
+      recordLifecycleHookBroadcastSent(stateDir, payload.sessionId, 'keyword-detector', hookFingerprint);
+      assert.equal(
+        shouldSendLifecycleHookBroadcast(stateDir, payload.sessionId, 'keyword-detector', hookFingerprint),
+        false,
+      );
+      assert.equal(shouldSendLifecycleNotification(stateDir, payload), false);
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

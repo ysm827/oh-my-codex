@@ -4,6 +4,11 @@ import { appendFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { getPackageRoot } from "../../utils/package.js";
 import {
+	createLifecycleBroadcastFingerprint,
+	recordLifecycleHookBroadcastSent,
+	shouldSendLifecycleHookBroadcast,
+} from "../../notifications/lifecycle-dedupe.js";
+import {
 	discoverHookPlugins,
 	isHookPluginsEnabled,
 	resolveHookPluginTimeoutMs,
@@ -264,6 +269,26 @@ function shouldForceEnableRuntimeHookDispatch(
 	return event.source === "native" || event.source === "derived";
 }
 
+function shouldDedupeHookEvent(event: HookEventEnvelope): boolean {
+	if (event.source !== "native") return false;
+	return event.event === "session-start"
+		|| event.event === "stop"
+		|| event.event === "session-end"
+		|| event.event === "keyword-detector";
+}
+
+function buildHookEventFingerprint(event: HookEventEnvelope): string {
+	return createLifecycleBroadcastFingerprint({
+		event: event.event,
+		source: event.source,
+		session_id: event.session_id || "",
+		thread_id: event.thread_id || "",
+		turn_id: event.turn_id || "",
+		mode: event.mode || "",
+		context: event.context,
+	});
+}
+
 export async function dispatchHookEvent(
 	event: HookEventEnvelope,
 	options: HookDispatchOptions = {},
@@ -290,6 +315,32 @@ export async function dispatchHookEvent(
 			source: event.source,
 			enabled: false,
 			reason: "plugins_disabled",
+		});
+		return summary;
+	}
+
+	const dedupeFingerprint = shouldDedupeHookEvent(event)
+		? buildHookEventFingerprint(event)
+		: "";
+	if (
+		dedupeFingerprint
+		&& !shouldSendLifecycleHookBroadcast(
+			join(cwd, ".omx", "state"),
+			event.session_id,
+			event.event,
+			dedupeFingerprint,
+		)
+	) {
+		summary.reason = "deduped";
+		await appendHooksLog(cwd, {
+			type: "hook_dispatch",
+			event: event.event,
+			source: event.source,
+			enabled: true,
+			reason: "deduped",
+			session_id: event.session_id || null,
+			thread_id: event.thread_id || null,
+			turn_id: event.turn_id || null,
 		});
 		return summary;
 	}
@@ -324,6 +375,15 @@ export async function dispatchHookEvent(
 			error: result.error,
 			duration_ms: result.duration_ms,
 		});
+	}
+
+	if (dedupeFingerprint && summary.results.some((result) => result.ok)) {
+		recordLifecycleHookBroadcastSent(
+			join(cwd, ".omx", "state"),
+			event.session_id,
+			event.event,
+			dedupeFingerprint,
+		);
 	}
 
 	return summary;
