@@ -235,14 +235,16 @@ export async function notifyLifecycle(
       incompleteTasks: data.incompleteTasks,
     };
 
-    // Capture tmux tail for session+ verbosity on idle/stop/end events
+    // Auto-capture tmux tail only for live idle events. Stop/end lifecycle dispatches
+    // happen after the relevant session is stopping or has already completed, so
+    // blind capture-pane reads can replay historical pane lines into follow-up
+    // alerts. Explicitly supplied tmuxTail still passes through unchanged.
     const verbosity = getVerbosity(config);
-    const shouldAttemptTmuxTail =
+    if (
       shouldIncludeTmuxTail(verbosity)
       && !data.tmuxTail
-      && (event === "session-idle" || event === "session-stop" || event === "session-end");
-
-    if (shouldAttemptTmuxTail) {
+      && event === "session-idle"
+    ) {
       const { captureTmuxPaneWithLiveness } = await import("./tmux.js");
       const tmuxCapture = captureTmuxPaneWithLiveness(payload.tmuxPaneId);
       payload.tmuxTail = tmuxCapture.content ?? undefined;

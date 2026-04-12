@@ -87,7 +87,7 @@ export interface OpenClawPayload {
   projectName?: string;
   /** Tmux session name (if running inside tmux) */
   tmuxSession?: string;
-  /** Recent tmux pane output (for stop/session-end events) */
+  /** Recent tmux pane output when explicitly supplied by the caller. */
   tmuxTail?: string;
   /** Originating channel for reply routing (if OPENCLAW_REPLY_CHANNEL is set) */
   channel?: string;
@@ -113,7 +113,7 @@ export interface OpenClawContext {
   contextSummary?: string;
   reason?: string;
   question?: string;
-  /** Recent tmux pane output (captured automatically for stop/session-end events) */
+  /** Recent tmux pane output when explicitly supplied by the caller. */
   tmuxTail?: string;
   /** Originating channel for reply routing (from OPENCLAW_REPLY_CHANNEL env var) */
   replyChannel?: string;
