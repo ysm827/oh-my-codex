@@ -293,7 +293,13 @@ function readAllMappingsUnsafe(): SessionMapping[] {
 
 export function lookupByMessageId(platform: string, messageId: string): SessionMapping | null {
   const mappings = loadAllMappings();
-  return mappings.find(m => m.platform === platform && m.messageId === messageId) || null;
+  for (let index = mappings.length - 1; index >= 0; index -= 1) {
+    const mapping = mappings[index];
+    if (mapping.platform === platform && mapping.messageId === messageId) {
+      return mapping;
+    }
+  }
+  return null;
 }
 
 export function removeSession(sessionId: string): void {

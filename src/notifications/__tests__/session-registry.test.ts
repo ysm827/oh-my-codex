@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, rmSync, readFileSync } from 'fs';
-import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, appendFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
@@ -204,6 +204,54 @@ describe('session-registry lock contention behavior', () => {
 
       assert.equal(ok, false);
       assert.ok(elapsedMs < 7000, `expected bounded wait, got ${elapsedMs}ms`);
+    } finally {
+      if (typeof originalHome === 'string') process.env.HOME = originalHome;
+      else delete process.env.HOME;
+      if (typeof originalUserProfile === 'string') process.env.USERPROFILE = originalUserProfile;
+      else delete process.env.USERPROFILE;
+      await rm(homeDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('lookupByMessageId', () => {
+  it('prefers the most recent mapping when a platform message id is reused', async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), 'omx-session-registry-reuse-'));
+    const stateDir = join(homeDir, '.omx', 'state');
+    const registryPath = join(stateDir, 'reply-session-registry.jsonl');
+    const originalHome = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      process.env.HOME = homeDir;
+      process.env.USERPROFILE = homeDir;
+
+      const first = createMockMapping({
+        platform: 'discord-bot',
+        messageId: 'reused-message',
+        sessionId: 'session-earlier',
+        tmuxPaneId: '%1',
+        tmuxSessionName: 'earlier-session',
+        createdAt: '2026-03-20T00:00:00.000Z',
+      });
+      const second = createMockMapping({
+        platform: 'discord-bot',
+        messageId: 'reused-message',
+        sessionId: 'session-later',
+        tmuxPaneId: '%2',
+        tmuxSessionName: 'later-session',
+        createdAt: '2026-03-20T00:10:00.000Z',
+      });
+
+      await appendFile(registryPath, `${JSON.stringify(first)}\n${JSON.stringify(second)}\n`, 'utf-8');
+
+      const registry = await importSessionRegistryFresh();
+      const found = registry.lookupByMessageId('discord-bot', 'reused-message');
+
+      assert.ok(found);
+      assert.equal(found.sessionId, 'session-later');
+      assert.equal(found.tmuxPaneId, '%2');
     } finally {
       if (typeof originalHome === 'string') process.env.HOME = originalHome;
       else delete process.env.HOME;
