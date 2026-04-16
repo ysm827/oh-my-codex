@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-04-16
+
+Hotfix release for the detached tmux startup regression introduced in `0.13.0`.
+
+### Fixed
+- **Detached tmux stdin preservation** — detached leader shells now keep Codex stdin attached during background startup, so `omx --madmax --high` and related detached launch paths no longer exit immediately on macOS/iTerm2-style interactive sessions. (PR [#1631](https://github.com/Yeachan-Heo/oh-my-codex/pull/1631), issues [#1627](https://github.com/Yeachan-Heo/oh-my-codex/issues/1627), [#1628](https://github.com/Yeachan-Heo/oh-my-codex/issues/1628))
+
+### Changed
+- **Release metadata sync** — Node/Cargo package metadata, lockfiles, changelog, release body, release notes, and release-readiness docs aligned to `0.13.1`.
+
 ## [0.13.0] - 2026-04-16
 
 Minor release for the new `omx adapt` surface, stronger Ralph / runtime session authority, safer cross-platform launch behavior, and another broad pass over hook, HUD, notification, and release-process correctness.
