@@ -1056,6 +1056,24 @@ async function maybeReturnRepeatableStopOutput(
   return output;
 }
 
+async function returnPersistentStopBlock(
+  payload: CodexHookPayload,
+  stateDir: string,
+  signatureKind: string,
+  signatureValue: string,
+  output: Record<string, unknown> | null,
+  canonicalSessionId?: string,
+): Promise<Record<string, unknown> | null> {
+  return await maybeReturnRepeatableStopOutput(
+    payload,
+    stateDir,
+    buildRepeatableStopSignature(payload, signatureKind, signatureValue, canonicalSessionId),
+    output,
+    canonicalSessionId,
+    { allowRepeatDuringStopHook: true },
+  );
+}
+
 async function findCanonicalActiveTeamForSession(
   cwd: string,
   sessionId: string,
@@ -1292,16 +1310,43 @@ async function buildStopHookOutput(
   const managedStopContext = await hasManagedStopContext(cwd, payload, canonicalSessionId);
   if (!ralphState) {
     const teamWorkerOutput = await buildTeamWorkerStopOutput(cwd);
-    if (!stopHookActive && hasTeamWorkerContext()) return teamWorkerOutput;
+    if (hasTeamWorkerContext() && teamWorkerOutput) return teamWorkerOutput;
 
     const autopilotOutput = await buildModeBasedStopOutput("autopilot", cwd, canonicalSessionId);
-    if (!stopHookActive && autopilotOutput) return autopilotOutput;
+    if (autopilotOutput) {
+      return await returnPersistentStopBlock(
+        payload,
+        stateDir,
+        "autopilot-stop",
+        safeString(autopilotOutput.stopReason),
+        autopilotOutput,
+        canonicalSessionId,
+      );
+    }
 
     const ultraworkOutput = await buildModeBasedStopOutput("ultrawork", cwd, canonicalSessionId);
-    if (!stopHookActive && ultraworkOutput) return ultraworkOutput;
+    if (ultraworkOutput) {
+      return await returnPersistentStopBlock(
+        payload,
+        stateDir,
+        "ultrawork-stop",
+        safeString(ultraworkOutput.stopReason),
+        ultraworkOutput,
+        canonicalSessionId,
+      );
+    }
 
     const ultraqaOutput = await buildModeBasedStopOutput("ultraqa", cwd, canonicalSessionId);
-    if (!stopHookActive && ultraqaOutput) return ultraqaOutput;
+    if (ultraqaOutput) {
+      return await returnPersistentStopBlock(
+        payload,
+        stateDir,
+        "ultraqa-stop",
+        safeString(ultraqaOutput.stopReason),
+        ultraqaOutput,
+        canonicalSessionId,
+      );
+    }
 
     const releaseReadinessFinalizeResult = await maybeBuildReleaseReadinessFinalizeStopOutput(
       payload,
@@ -1313,16 +1358,11 @@ async function buildStopHookOutput(
 
     const teamOutput = await buildTeamStopOutput(cwd, canonicalSessionId);
     if (teamOutput) {
-      const teamSignature = buildRepeatableStopSignature(
-        payload,
-        "team-stop",
-        safeString(teamOutput.stopReason),
-        canonicalSessionId,
-      );
-      return await maybeReturnRepeatableStopOutput(
+      return await returnPersistentStopBlock(
         payload,
         stateDir,
-        teamSignature,
+        "team-stop",
+        safeString(teamOutput.stopReason),
         teamOutput,
         canonicalSessionId,
       );
@@ -1335,16 +1375,11 @@ async function buildStopHookOutput(
           canonicalTeam.teamName,
           canonicalTeam.phase,
         );
-        const canonicalTeamSignature = buildRepeatableStopSignature(
-          payload,
-          "team-stop",
-          `${canonicalTeam.teamName}|${canonicalTeam.phase}`,
-          canonicalSessionId,
-        );
-        const repeatedCanonicalTeamOutput = await maybeReturnRepeatableStopOutput(
+        const repeatedCanonicalTeamOutput = await returnPersistentStopBlock(
           payload,
           stateDir,
-          canonicalTeamSignature,
+          "team-stop",
+          `${canonicalTeam.teamName}|${canonicalTeam.phase}`,
           canonicalTeamOutput,
           canonicalSessionId,
         );
@@ -1352,7 +1387,16 @@ async function buildStopHookOutput(
       }
 
       const skillOutput = await buildSkillStopOutput(cwd, canonicalSessionId, threadId);
-      if (!stopHookActive && skillOutput) return skillOutput;
+      if (skillOutput) {
+        return await returnPersistentStopBlock(
+          payload,
+          stateDir,
+          "skill-stop",
+          safeString(skillOutput.stopReason),
+          skillOutput,
+          canonicalSessionId,
+        );
+      }
     }
 
     if (!managedStopContext) {
@@ -1370,10 +1414,11 @@ async function buildStopHookOutput(
       && detectNativeStopStallPattern(lastAssistantMessage, autoNudgeConfig.patterns, autoNudgePhase)
     ) {
       const effectiveResponse = resolveEffectiveAutoNudgeResponse(autoNudgeConfig.response);
-      return await maybeReturnRepeatableStopOutput(
+      return await returnPersistentStopBlock(
         payload,
         stateDir,
-        buildRepeatableStopSignature(payload, "auto-nudge", lastAssistantMessage, canonicalSessionId),
+        "auto-nudge",
+        lastAssistantMessage,
         {
           decision: "block",
           reason: effectiveResponse,
@@ -1393,26 +1438,11 @@ async function buildStopHookOutput(
   const systemMessage =
     `OMX Ralph is still active (phase: ${currentPhase}); continue the task and gather fresh verification evidence before stopping.`;
 
-  if (stopHookActive) {
-    return await maybeReturnRepeatableStopOutput(
-      payload,
-      stateDir,
-      buildRepeatableStopSignature(payload, "ralph-stop", currentPhase, canonicalSessionId),
-      {
-        decision: "block",
-        reason: systemMessage,
-        stopReason,
-        systemMessage,
-      },
-      canonicalSessionId,
-      { allowRepeatDuringStopHook: true },
-    );
-  }
-
-  return await maybeReturnRepeatableStopOutput(
+  return await returnPersistentStopBlock(
     payload,
     stateDir,
-    buildRepeatableStopSignature(payload, "ralph-stop", currentPhase, canonicalSessionId),
+    "ralph-stop",
+    currentPhase,
     {
       decision: "block",
       reason: systemMessage,
@@ -1420,7 +1450,6 @@ async function buildStopHookOutput(
       systemMessage,
     },
     canonicalSessionId,
-    { allowRepeatDuringStopHook: true },
   );
 }
 

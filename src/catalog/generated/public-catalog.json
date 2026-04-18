@@ -1,10 +1,10 @@
 {
-  "generatedAt": "2026-04-17T02:40:37.754Z",
+  "generatedAt": "2026-04-18T00:57:32.991Z",
   "version": "2026.02.28.1",
   "counts": {
     "skillCount": 39,
     "promptCount": 30,
-    "activeSkillCount": 24,
+    "activeSkillCount": 25,
     "activeAgentCount": 18
   },
   "coreSkills": [
@@ -54,8 +54,7 @@
     {
       "name": "ultraqa",
       "category": "execution",
-      "status": "merged",
-      "canonical": "ralph",
+      "status": "active",
       "core": false,
       "internalRequired": false
     },
@@ -474,10 +473,6 @@
     {
       "name": "ecomode",
       "canonical": "ultrawork"
-    },
-    {
-      "name": "ultraqa",
-      "canonical": "ralph"
     },
     {
       "name": "swarm",

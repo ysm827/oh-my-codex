@@ -41,8 +41,7 @@
     {
       "name": "ultraqa",
       "category": "execution",
-      "status": "merged",
-      "canonical": "ralph",
+      "status": "active",
       "core": false,
       "internalRequired": false
     },

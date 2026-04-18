@@ -2111,7 +2111,13 @@ esac
         { cwd },
       );
 
-      assert.equal(result.outputJson, null);
+      assert.deepEqual(result.outputJson, {
+        decision: "block",
+        reason:
+          `OMX team pipeline is still active (worker-stop-team-terminal) at phase team-exec; continue coordinating until the team reaches a terminal phase.${TEAM_STOP_COMMIT_GUIDANCE}`,
+        stopReason: "team_team-exec",
+        systemMessage: "OMX team pipeline is still active at phase team-exec.",
+      });
     } finally {
       if (typeof prevTeamWorker === "string") process.env.OMX_TEAM_WORKER = prevTeamWorker;
       else delete process.env.OMX_TEAM_WORKER;
@@ -3022,7 +3028,7 @@ esac
     }
   });
 
-  it("suppresses duplicate native auto-nudge replays for the same Stop reply", async () => {
+  it("re-blocks duplicate native auto-nudge replays for the same Stop reply", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-auto-nudge-once-"));
     try {
       const stateDir = join(cwd, ".omx", "state");
@@ -3055,13 +3061,19 @@ esac
       );
 
       assert.equal(result.omxEventName, "stop");
-      assert.equal(result.outputJson, null);
+      assert.deepEqual(result.outputJson, {
+        decision: "block",
+        reason: DEFAULT_AUTO_NUDGE_RESPONSE,
+        stopReason: "auto_nudge",
+        systemMessage:
+          "OMX native Stop detected a stall/permission-style handoff and continued the turn automatically.",
+      });
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
   });
 
-  it("suppresses duplicate native auto-nudge replays across native/canonical session-id drift", async () => {
+  it("re-blocks duplicate native auto-nudge replays across native/canonical session-id drift", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-auto-nudge-session-drift-"));
     try {
       const stateDir = join(cwd, ".omx", "state");
@@ -3098,7 +3110,13 @@ esac
       );
 
       assert.equal(result.omxEventName, "stop");
-      assert.equal(result.outputJson, null);
+      assert.deepEqual(result.outputJson, {
+        decision: "block",
+        reason: DEFAULT_AUTO_NUDGE_RESPONSE,
+        stopReason: "auto_nudge",
+        systemMessage:
+          "OMX native Stop detected a stall/permission-style handoff and continued the turn automatically.",
+      });
 
       const persisted = JSON.parse(
         await readFile(join(stateDir, "native-stop-state.json"), "utf-8"),
@@ -3621,7 +3639,13 @@ esac
       );
 
       assert.equal(duplicate.omxEventName, "stop");
-      assert.equal(duplicate.outputJson, null);
+      assert.deepEqual(duplicate.outputJson, {
+        decision: "block",
+        reason:
+          `OMX team pipeline is still active (current-team) at phase team-verify; continue coordinating until the team reaches a terminal phase.${TEAM_STOP_COMMIT_GUIDANCE}`,
+        stopReason: "team_team-verify",
+        systemMessage: "OMX team pipeline is still active at phase team-verify.",
+      });
 
       const fresh = await dispatchCodexNativeHook(
         {
@@ -3648,6 +3672,126 @@ esac
         await readFile(join(stateDir, "native-stop-state.json"), "utf-8"),
       ) as { sessions?: Record<string, unknown> };
       assert.deepEqual(Object.keys(persisted.sessions ?? {}), ["omx-canonical"]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("re-blocks active execution modes on repeated Stop hooks", async () => {
+    const cases = [
+      {
+        mode: "autopilot",
+        phase: "execution",
+        reason:
+          "OMX autopilot is still active (phase: execution); continue the task and gather fresh verification evidence before stopping.",
+      },
+      {
+        mode: "ultrawork",
+        phase: "executing",
+        reason:
+          "OMX ultrawork is still active (phase: executing); continue the task and gather fresh verification evidence before stopping.",
+      },
+      {
+        mode: "ultraqa",
+        phase: "diagnose",
+        reason:
+          "OMX ultraqa is still active (phase: diagnose); continue the task and gather fresh verification evidence before stopping.",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const cwd = await mkdtemp(join(tmpdir(), `omx-native-hook-stop-${testCase.mode}-repeat-`));
+      try {
+        const stateDir = join(cwd, ".omx", "state");
+        await mkdir(stateDir, { recursive: true });
+        await writeJson(join(stateDir, `${testCase.mode}-state.json`), {
+          active: true,
+          current_phase: testCase.phase,
+        });
+
+        await dispatchCodexNativeHook(
+          {
+            hook_event_name: "Stop",
+            cwd,
+            session_id: `sess-stop-${testCase.mode}-repeat`,
+            thread_id: `thread-stop-${testCase.mode}-repeat`,
+            turn_id: `turn-stop-${testCase.mode}-repeat-1`,
+          },
+          { cwd },
+        );
+
+        const repeated = await dispatchCodexNativeHook(
+          {
+            hook_event_name: "Stop",
+            cwd,
+            session_id: `sess-stop-${testCase.mode}-repeat`,
+            thread_id: `thread-stop-${testCase.mode}-repeat`,
+            turn_id: `turn-stop-${testCase.mode}-repeat-1`,
+            stop_hook_active: true,
+          },
+          { cwd },
+        );
+
+        assert.equal(repeated.omxEventName, "stop");
+        assert.deepEqual(repeated.outputJson, {
+          decision: "block",
+          reason: testCase.reason,
+          stopReason: `${testCase.mode}_${testCase.phase}`,
+          systemMessage: `OMX ${testCase.mode} is still active (phase: ${testCase.phase}).`,
+        });
+      } finally {
+        await rm(cwd, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("re-blocks active ralplan skill state on repeated Stop hooks", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-skill-repeat-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(join(stateDir, "sessions", "sess-stop-skill-repeat"), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-stop-skill-repeat" });
+      await writeJson(join(stateDir, "sessions", "sess-stop-skill-repeat", "skill-active-state.json"), {
+        active: true,
+        skill: "ralplan",
+        phase: "planning",
+      });
+      await writeJson(join(stateDir, "sessions", "sess-stop-skill-repeat", "ralplan-state.json"), {
+        active: true,
+        current_phase: "planning",
+      });
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-stop-skill-repeat",
+          thread_id: "thread-stop-skill-repeat",
+          turn_id: "turn-stop-skill-repeat-1",
+        },
+        { cwd },
+      );
+
+      const repeated = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-stop-skill-repeat",
+          thread_id: "thread-stop-skill-repeat",
+          turn_id: "turn-stop-skill-repeat-1",
+          stop_hook_active: true,
+        },
+        { cwd },
+      );
+
+      assert.equal(repeated.omxEventName, "stop");
+      assert.deepEqual(repeated.outputJson, {
+        decision: "block",
+        reason:
+          "OMX skill ralplan is still active (phase: planning); continue until the current ralplan workflow reaches a terminal state.",
+        stopReason: "skill_ralplan_planning",
+        systemMessage: "OMX skill ralplan is still active (phase: planning).",
+      });
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

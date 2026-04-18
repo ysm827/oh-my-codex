@@ -70,7 +70,7 @@ describe('omx setup skills overwrite behavior', () => {
       assert.equal(installed.has('worker'), true);
       assert.equal(installed.has('swarm'), false);
       assert.equal(installed.has('ecomode'), false);
-      assert.equal(installed.has('ultraqa'), false);
+      assert.equal(installed.has('ultraqa'), true);
       assert.equal(installed.has('ralph-init'), false);
       assert.equal(installed.has('frontend-ui-ux'), false);
       assert.equal(installed.has('pipeline'), false);
@@ -99,7 +99,7 @@ describe('omx setup skills overwrite behavior', () => {
 
       await setup({ scope: 'project' });
 
-      const staleSkills = ['swarm', 'ecomode', 'ultraqa', 'configure-discord', 'configure-telegram', 'configure-slack', 'configure-openclaw'];
+      const staleSkills = ['swarm', 'ecomode', 'configure-discord', 'configure-telegram', 'configure-slack', 'configure-openclaw'];
       for (const staleSkill of staleSkills) {
         const staleDir = join(wd, '.codex', 'skills', staleSkill);
         await mkdir(staleDir, { recursive: true });
