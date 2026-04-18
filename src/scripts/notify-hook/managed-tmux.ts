@@ -277,6 +277,11 @@ function paneLooksLikeRetainableManagedAnchor({ currentCommand, startCommand }: 
   return false;
 }
 
+function paneLooksLikeDetachedManagedWrapperFallback({ currentCommand, startCommand }: { currentCommand: string; startCommand: string }): boolean {
+  if (/\bomx\b.*\bhud\b.*--watch/i.test(startCommand)) return false;
+  return currentCommand === 'node' || currentCommand === 'npx';
+}
+
 interface ManagedSessionPaneRow {
   paneId: string;
   active: boolean;
@@ -301,12 +306,21 @@ function parseManagedSessionPaneRows(stdout: string): ManagedSessionPaneRow[] {
     .filter((row) => row.paneId !== '');
 }
 
-function selectManagedSessionPane(rows: ManagedSessionPaneRow[]): string {
+function selectManagedSessionPane(
+  rows: ManagedSessionPaneRow[],
+  { allowWrapperFallback = false }: { allowWrapperFallback?: boolean } = {},
+): string {
   const nonHudRows = rows.filter((row) => !/\bomx\b.*\bhud\b.*--watch/i.test(row.startCommand));
   const canonicalRows = nonHudRows.filter((row) => paneLooksLikeRetainableManagedAnchor(row));
   const activeCanonical = canonicalRows.find((row) => row.active);
   if (activeCanonical) return activeCanonical.paneId;
-  return canonicalRows[0]?.paneId || '';
+  if (canonicalRows[0]?.paneId) return canonicalRows[0].paneId;
+  if (!allowWrapperFallback) return '';
+
+  const wrapperFallbackRows = nonHudRows.filter((row) => paneLooksLikeDetachedManagedWrapperFallback(row));
+  const activeWrapperFallback = wrapperFallbackRows.find((row) => row.active);
+  if (activeWrapperFallback) return activeWrapperFallback.paneId;
+  return wrapperFallbackRows[0]?.paneId || '';
 }
 export async function resolveManagedCurrentPane(cwd: string, payload: any, { allowTeamWorker = false } = {}): Promise<string> {
   const paneTarget = safeString(process.env.TMUX_PANE || '').trim();
@@ -329,7 +343,7 @@ export async function resolveManagedSessionPane(cwd: string, payload: any): Prom
       ['list-panes', '-s', '-t', expectedSession, '-F', '#{pane_id}\t#{pane_active}\t#{pane_current_command}\t#{pane_start_command}'],
       2000,
     );
-    return selectManagedSessionPane(parseManagedSessionPaneRows(panesResult.stdout));
+    return selectManagedSessionPane(parseManagedSessionPaneRows(panesResult.stdout), { allowWrapperFallback: true });
   } catch {
     // best effort only
   }
@@ -356,7 +370,9 @@ export async function resolveManagedPaneFromAnchor(anchorPane: string, cwd: stri
       ['list-panes', '-s', '-t', sessionName, '-F', '#{pane_id}\t#{pane_active}\t#{pane_current_command}\t#{pane_start_command}'],
       2000,
     );
-    const selectedPane = selectManagedSessionPane(parseManagedSessionPaneRows(panesResult.stdout));
+    const selectedPane = selectManagedSessionPane(parseManagedSessionPaneRows(panesResult.stdout), {
+      allowWrapperFallback: paneLooksLikeDetachedManagedWrapperFallback(commandState),
+    });
     if (selectedPane) return selectedPane;
   } catch {
     // best effort only
