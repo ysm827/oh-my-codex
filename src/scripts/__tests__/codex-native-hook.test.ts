@@ -483,7 +483,14 @@ describe("codex native hook dispatch", () => {
 
       assert.equal(result.omxEventName, "keyword-detector");
       assert.equal(result.skillState, null);
-      assert.equal(result.outputJson, null);
+      // Triage may inject advisory LIGHT/explore context for the question-shaped
+      // prompt, but the invariant this test guards is that no Ralph workflow state
+      // is seeded and no Ralph-activation message is emitted.
+      const advisoryContext = String(
+        (result.outputJson as { hookSpecificOutput?: { additionalContext?: string } })?.hookSpecificOutput?.additionalContext || "",
+      );
+      assert.doesNotMatch(advisoryContext, /skill:\s*ralph/i);
+      assert.doesNotMatch(advisoryContext, /ralph-state\.json/i);
       assert.equal(existsSync(join(cwd, ".omx", "state", "skill-active-state.json")), false);
       assert.equal(existsSync(join(cwd, ".omx", "state", "sessions", "sess-ralph-plain-text", "skill-active-state.json")), false);
       assert.equal(existsSync(join(cwd, ".omx", "state", "sessions", "sess-ralph-plain-text", "ralph-state.json")), false);
