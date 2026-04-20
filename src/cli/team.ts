@@ -461,6 +461,94 @@ function logInspectEntries<T>(
   }
 }
 
+type InspectEntryDescriptor<T> = {
+  prefix: string;
+  entries: Record<string, T>;
+  shouldLog: (value: T) => boolean;
+  formatValue?: (value: T) => string;
+};
+
+function logInspectEntryDescriptors(descriptors: InspectEntryDescriptor<unknown>[]): void {
+  for (const descriptor of descriptors) {
+    logInspectEntries(descriptor.prefix, descriptor.entries, descriptor.shouldLog, descriptor.formatValue);
+  }
+}
+
+function inspectEntryDescriptors(paneStatus: TeamPaneStatus): InspectEntryDescriptor<unknown>[] {
+  const isPresentString = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
+  const isNumber = (value: unknown): value is number => typeof value === 'number';
+  const isBoolean = (value: unknown): value is boolean => typeof value === 'boolean';
+  const hasItems = (value: unknown): value is string[] => Array.isArray(value) && value.length > 0;
+  const joinSpace = (value: unknown): string => Array.isArray(value) ? value.join(' ') : String(value);
+
+  return [
+    { prefix: 'inspect_reason', entries: paneStatus.recommended_inspect_reasons, shouldLog: isPresentString },
+    { prefix: 'inspect_cli', entries: paneStatus.recommended_inspect_clis, shouldLog: isPresentString },
+    { prefix: 'inspect_role', entries: paneStatus.recommended_inspect_roles, shouldLog: isPresentString },
+    { prefix: 'inspect_index', entries: paneStatus.recommended_inspect_indexes, shouldLog: isNumber },
+    { prefix: 'inspect_alive', entries: paneStatus.recommended_inspect_alive, shouldLog: isBoolean },
+    { prefix: 'inspect_turn_count', entries: paneStatus.recommended_inspect_turn_counts, shouldLog: isNumber },
+    { prefix: 'inspect_turns_without_progress', entries: paneStatus.recommended_inspect_turns_without_progress, shouldLog: isNumber },
+    { prefix: 'inspect_last_turn_at', entries: paneStatus.recommended_inspect_last_turn_at, shouldLog: isPresentString },
+    { prefix: 'inspect_status_updated_at', entries: paneStatus.recommended_inspect_status_updated_at, shouldLog: isPresentString },
+    { prefix: 'inspect_pid', entries: paneStatus.recommended_inspect_pids, shouldLog: isNumber },
+    { prefix: 'inspect_worktree_path', entries: paneStatus.recommended_inspect_worktree_paths, shouldLog: isPresentString },
+    { prefix: 'inspect_worktree_repo_root', entries: paneStatus.recommended_inspect_worktree_repo_roots, shouldLog: isPresentString },
+    { prefix: 'inspect_worktree_branch', entries: paneStatus.recommended_inspect_worktree_branches, shouldLog: isPresentString },
+    { prefix: 'inspect_worktree_detached', entries: paneStatus.recommended_inspect_worktree_detached, shouldLog: isBoolean },
+    { prefix: 'inspect_worktree_created', entries: paneStatus.recommended_inspect_worktree_created, shouldLog: isBoolean },
+    { prefix: 'inspect_team_state_root', entries: paneStatus.recommended_inspect_team_state_roots, shouldLog: isPresentString },
+    { prefix: 'inspect_workdir', entries: paneStatus.recommended_inspect_workdirs, shouldLog: isPresentString },
+    { prefix: 'inspect_assigned_tasks', entries: paneStatus.recommended_inspect_assigned_tasks, shouldLog: hasItems, formatValue: joinSpace },
+    { prefix: 'inspect_task_status', entries: paneStatus.recommended_inspect_task_statuses, shouldLog: isPresentString },
+    { prefix: 'inspect_task_result', entries: paneStatus.recommended_inspect_task_results, shouldLog: isPresentString },
+    { prefix: 'inspect_task_error', entries: paneStatus.recommended_inspect_task_errors, shouldLog: isPresentString },
+    { prefix: 'inspect_task_version', entries: paneStatus.recommended_inspect_task_versions, shouldLog: isNumber },
+    { prefix: 'inspect_task_created_at', entries: paneStatus.recommended_inspect_task_created_at, shouldLog: isPresentString },
+    { prefix: 'inspect_task_completed_at', entries: paneStatus.recommended_inspect_task_completed_at, shouldLog: isPresentString },
+    { prefix: 'inspect_task_depends_on', entries: paneStatus.recommended_inspect_task_depends_on, shouldLog: hasItems, formatValue: joinSpace },
+    { prefix: 'inspect_task_claim_present', entries: paneStatus.recommended_inspect_task_claim_present, shouldLog: isBoolean },
+    { prefix: 'inspect_task_claim_owner', entries: paneStatus.recommended_inspect_task_claim_owners, shouldLog: isPresentString },
+    { prefix: 'inspect_task_claim_token', entries: paneStatus.recommended_inspect_task_claim_tokens, shouldLog: isPresentString },
+    { prefix: 'inspect_task_claim_leased_until', entries: paneStatus.recommended_inspect_task_claim_leases, shouldLog: isPresentString },
+    { prefix: 'inspect_task_claim_lock_path', entries: paneStatus.recommended_inspect_task_claim_lock_paths, shouldLog: isPresentString },
+    { prefix: 'inspect_approval_required', entries: paneStatus.recommended_inspect_approval_required, shouldLog: isBoolean },
+    { prefix: 'inspect_requires_code_change', entries: paneStatus.recommended_inspect_requires_code_change, shouldLog: isBoolean },
+    { prefix: 'inspect_description', entries: paneStatus.recommended_inspect_descriptions, shouldLog: isPresentString },
+    { prefix: 'inspect_blocked_by', entries: paneStatus.recommended_inspect_blocked_by, shouldLog: hasItems, formatValue: joinSpace },
+    { prefix: 'inspect_task_role', entries: paneStatus.recommended_inspect_task_roles, shouldLog: isPresentString },
+    { prefix: 'inspect_task_owner', entries: paneStatus.recommended_inspect_task_owners, shouldLog: isPresentString },
+    { prefix: 'inspect_approval_status', entries: paneStatus.recommended_inspect_approval_statuses, shouldLog: isPresentString },
+    { prefix: 'inspect_approval_reviewer', entries: paneStatus.recommended_inspect_approval_reviewers, shouldLog: isPresentString },
+    { prefix: 'inspect_approval_reason', entries: paneStatus.recommended_inspect_approval_reasons, shouldLog: isPresentString },
+    { prefix: 'inspect_approval_decided_at', entries: paneStatus.recommended_inspect_approval_decided_at, shouldLog: isPresentString },
+    { prefix: 'inspect_approval_record_present', entries: paneStatus.recommended_inspect_approval_record_present, shouldLog: isBoolean },
+    { prefix: 'inspect_state', entries: paneStatus.recommended_inspect_states, shouldLog: isPresentString },
+    { prefix: 'inspect_state_reason', entries: paneStatus.recommended_inspect_state_reasons, shouldLog: isPresentString },
+    { prefix: 'inspect_task', entries: paneStatus.recommended_inspect_tasks, shouldLog: isPresentString },
+    { prefix: 'inspect_subject', entries: paneStatus.recommended_inspect_subjects, shouldLog: isPresentString },
+    { prefix: 'inspect_task_path', entries: paneStatus.recommended_inspect_task_paths, shouldLog: isPresentString },
+    { prefix: 'inspect_approval_path', entries: paneStatus.recommended_inspect_approval_paths, shouldLog: isPresentString },
+    { prefix: 'inspect_worker_state_dir', entries: paneStatus.recommended_inspect_worker_state_dirs, shouldLog: isPresentString },
+    { prefix: 'inspect_worker_status_path', entries: paneStatus.recommended_inspect_worker_status_paths, shouldLog: isPresentString },
+    { prefix: 'inspect_worker_heartbeat_path', entries: paneStatus.recommended_inspect_worker_heartbeat_paths, shouldLog: isPresentString },
+    { prefix: 'inspect_worker_identity_path', entries: paneStatus.recommended_inspect_worker_identity_paths, shouldLog: isPresentString },
+    { prefix: 'inspect_worker_inbox_path', entries: paneStatus.recommended_inspect_worker_inbox_paths, shouldLog: isPresentString },
+    { prefix: 'inspect_worker_mailbox_path', entries: paneStatus.recommended_inspect_worker_mailbox_paths, shouldLog: isPresentString },
+    { prefix: 'inspect_worker_shutdown_request_path', entries: paneStatus.recommended_inspect_worker_shutdown_request_paths, shouldLog: isPresentString },
+    { prefix: 'inspect_worker_shutdown_ack_path', entries: paneStatus.recommended_inspect_worker_shutdown_ack_paths, shouldLog: isPresentString },
+    { prefix: 'inspect_team_dir_path', entries: paneStatus.recommended_inspect_team_dir_paths, shouldLog: isPresentString },
+    { prefix: 'inspect_team_config_path', entries: paneStatus.recommended_inspect_team_config_paths, shouldLog: isPresentString },
+    { prefix: 'inspect_team_manifest_path', entries: paneStatus.recommended_inspect_team_manifest_paths, shouldLog: isPresentString },
+    { prefix: 'inspect_team_events_path', entries: paneStatus.recommended_inspect_team_events_paths, shouldLog: isPresentString },
+    { prefix: 'inspect_team_dispatch_path', entries: paneStatus.recommended_inspect_team_dispatch_paths, shouldLog: isPresentString },
+    { prefix: 'inspect_team_phase_path', entries: paneStatus.recommended_inspect_team_phase_paths, shouldLog: isPresentString },
+    { prefix: 'inspect_team_monitor_snapshot_path', entries: paneStatus.recommended_inspect_team_monitor_snapshot_paths, shouldLog: isPresentString },
+    { prefix: 'inspect_team_summary_snapshot_path', entries: paneStatus.recommended_inspect_team_summary_snapshot_paths, shouldLog: isPresentString },
+    { prefix: 'inspect_pane', entries: paneStatus.recommended_inspect_panes, shouldLog: isPresentString },
+  ];
+}
+
 function formatInspectItemLine(index: number, item: TeamInspectItem): string {
   const parts = [
     `inspect_item_${index + 1}:`,
@@ -554,70 +642,7 @@ function renderTeamPaneStatus(
     console.log(`recommended_inspect_targets: ${paneStatus.recommended_inspect_targets.join(' ')}`);
   }
 
-  logInspectEntries('inspect_reason', paneStatus.recommended_inspect_reasons, (value) => value.length > 0);
-  logInspectEntries('inspect_cli', paneStatus.recommended_inspect_clis, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_role', paneStatus.recommended_inspect_roles, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_index', paneStatus.recommended_inspect_indexes, (value) => typeof value === 'number');
-  logInspectEntries('inspect_alive', paneStatus.recommended_inspect_alive, (value) => typeof value === 'boolean');
-  logInspectEntries('inspect_turn_count', paneStatus.recommended_inspect_turn_counts, (value) => typeof value === 'number');
-  logInspectEntries('inspect_turns_without_progress', paneStatus.recommended_inspect_turns_without_progress, (value) => typeof value === 'number');
-  logInspectEntries('inspect_last_turn_at', paneStatus.recommended_inspect_last_turn_at, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_status_updated_at', paneStatus.recommended_inspect_status_updated_at, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_pid', paneStatus.recommended_inspect_pids, (value) => typeof value === 'number');
-  logInspectEntries('inspect_worktree_path', paneStatus.recommended_inspect_worktree_paths, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_worktree_repo_root', paneStatus.recommended_inspect_worktree_repo_roots, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_worktree_branch', paneStatus.recommended_inspect_worktree_branches, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_worktree_detached', paneStatus.recommended_inspect_worktree_detached, (value) => typeof value === 'boolean');
-  logInspectEntries('inspect_worktree_created', paneStatus.recommended_inspect_worktree_created, (value) => typeof value === 'boolean');
-  logInspectEntries('inspect_team_state_root', paneStatus.recommended_inspect_team_state_roots, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_workdir', paneStatus.recommended_inspect_workdirs, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_assigned_tasks', paneStatus.recommended_inspect_assigned_tasks, (value) => value.length > 0, (value) => value.join(' '));
-  logInspectEntries('inspect_task_status', paneStatus.recommended_inspect_task_statuses, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_task_result', paneStatus.recommended_inspect_task_results, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_task_error', paneStatus.recommended_inspect_task_errors, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_task_version', paneStatus.recommended_inspect_task_versions, (value) => typeof value === 'number');
-  logInspectEntries('inspect_task_created_at', paneStatus.recommended_inspect_task_created_at, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_task_completed_at', paneStatus.recommended_inspect_task_completed_at, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_task_depends_on', paneStatus.recommended_inspect_task_depends_on, (value) => value.length > 0, (value) => value.join(' '));
-  logInspectEntries('inspect_task_claim_present', paneStatus.recommended_inspect_task_claim_present, (value) => typeof value === 'boolean');
-  logInspectEntries('inspect_task_claim_owner', paneStatus.recommended_inspect_task_claim_owners, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_task_claim_token', paneStatus.recommended_inspect_task_claim_tokens, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_task_claim_leased_until', paneStatus.recommended_inspect_task_claim_leases, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_task_claim_lock_path', paneStatus.recommended_inspect_task_claim_lock_paths, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_approval_required', paneStatus.recommended_inspect_approval_required, (value) => typeof value === 'boolean');
-  logInspectEntries('inspect_requires_code_change', paneStatus.recommended_inspect_requires_code_change, (value) => typeof value === 'boolean');
-  logInspectEntries('inspect_description', paneStatus.recommended_inspect_descriptions, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_blocked_by', paneStatus.recommended_inspect_blocked_by, (value) => value.length > 0, (value) => value.join(' '));
-  logInspectEntries('inspect_task_role', paneStatus.recommended_inspect_task_roles, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_task_owner', paneStatus.recommended_inspect_task_owners, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_approval_status', paneStatus.recommended_inspect_approval_statuses, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_approval_reviewer', paneStatus.recommended_inspect_approval_reviewers, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_approval_reason', paneStatus.recommended_inspect_approval_reasons, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_approval_decided_at', paneStatus.recommended_inspect_approval_decided_at, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_approval_record_present', paneStatus.recommended_inspect_approval_record_present, (value) => typeof value === 'boolean');
-  logInspectEntries('inspect_state', paneStatus.recommended_inspect_states, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_state_reason', paneStatus.recommended_inspect_state_reasons, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_task', paneStatus.recommended_inspect_tasks, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_subject', paneStatus.recommended_inspect_subjects, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_task_path', paneStatus.recommended_inspect_task_paths, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_approval_path', paneStatus.recommended_inspect_approval_paths, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_worker_state_dir', paneStatus.recommended_inspect_worker_state_dirs, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_worker_status_path', paneStatus.recommended_inspect_worker_status_paths, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_worker_heartbeat_path', paneStatus.recommended_inspect_worker_heartbeat_paths, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_worker_identity_path', paneStatus.recommended_inspect_worker_identity_paths, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_worker_inbox_path', paneStatus.recommended_inspect_worker_inbox_paths, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_worker_mailbox_path', paneStatus.recommended_inspect_worker_mailbox_paths, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_worker_shutdown_request_path', paneStatus.recommended_inspect_worker_shutdown_request_paths, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_worker_shutdown_ack_path', paneStatus.recommended_inspect_worker_shutdown_ack_paths, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_team_dir_path', paneStatus.recommended_inspect_team_dir_paths, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_team_config_path', paneStatus.recommended_inspect_team_config_paths, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_team_manifest_path', paneStatus.recommended_inspect_team_manifest_paths, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_team_events_path', paneStatus.recommended_inspect_team_events_paths, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_team_dispatch_path', paneStatus.recommended_inspect_team_dispatch_paths, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_team_phase_path', paneStatus.recommended_inspect_team_phase_paths, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_team_monitor_snapshot_path', paneStatus.recommended_inspect_team_monitor_snapshot_paths, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_team_summary_snapshot_path', paneStatus.recommended_inspect_team_summary_snapshot_paths, (value) => typeof value === 'string' && value.length > 0);
-  logInspectEntries('inspect_pane', paneStatus.recommended_inspect_panes, (value) => typeof value === 'string' && value.length > 0);
+  logInspectEntryDescriptors(inspectEntryDescriptors(paneStatus));
 
   if (paneStatus.recommended_inspect_command) {
     console.log(`inspect_next: ${paneStatus.recommended_inspect_command}`);
