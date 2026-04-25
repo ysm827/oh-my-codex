@@ -94,6 +94,19 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+let atomicJsonWriteCounter = 0;
+
+async function writeJsonObjectAtomically(path: string, value: unknown): Promise<void> {
+  const tempPath = `${path}.${process.pid}.${Date.now()}.${++atomicJsonWriteCounter}.tmp`;
+  try {
+    await writeFile(tempPath, JSON.stringify(value, null, 2));
+    await rename(tempPath, path);
+  } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => {});
+    throw error;
+  }
+}
+
 async function waitForPidExit(pid: number, timeoutMs = 3000, stepMs = 50): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -1336,7 +1349,7 @@ async function writeState(extra: Record<string, unknown> = {}): Promise<void> {
     },
     ...extra,
   };
-  await writeFile(statePath, JSON.stringify(state, null, 2)).catch(() => {});
+  await writeJsonObjectAtomically(statePath, state).catch(() => {});
 }
 
 async function writeAuthorityBackoffState(): Promise<void> {
@@ -1345,7 +1358,7 @@ async function writeAuthorityBackoffState(): Promise<void> {
   const state = existing && typeof existing === 'object'
     ? { ...existing, authority_backoff: lastAuthorityBackoff }
     : { authority_backoff: lastAuthorityBackoff };
-  await writeFile(statePath, JSON.stringify(state, null, 2)).catch(() => {});
+  await writeJsonObjectAtomically(statePath, state).catch(() => {});
 }
 
 async function readJsonObject(path: string): Promise<Record<string, unknown> | null> {
