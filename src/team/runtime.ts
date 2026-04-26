@@ -16,8 +16,8 @@ import {
   resolveTeamWorkerLaunchMode,
   type TeamSession,
   waitForWorkerReady,
+  waitForWorkerReadyAsync,
   dismissTrustPromptIfPresent,
-  sleepFractionalSeconds,
   sendToWorker,
   sendToWorkerStdin,
   isWorkerAlive,
@@ -1989,6 +1989,31 @@ function resolveEffectiveWorkerCliForStartupLog(
 /**
  * Start a new team: init state, create tmux session, bootstrap workers.
  */
+
+export type StartupAttemptResult =
+  | { ok: true; workerIndex: number; workerName: string }
+  | { ok: false; workerIndex: number; workerName: string; error: Error };
+
+export interface StartupAttemptDescriptor {
+  workerIndex: number;
+  workerName: string;
+  attempt: Promise<StartupAttemptResult>;
+}
+
+export async function settleStartupAttemptResults(
+  attempts: readonly StartupAttemptDescriptor[],
+): Promise<StartupAttemptResult[]> {
+  const settled = await Promise.allSettled(attempts.map((attempt) => attempt.attempt));
+  return settled.map((result, index) => {
+    if (result.status === 'fulfilled') return result.value;
+    const descriptor = attempts[index];
+    const workerIndex = descriptor?.workerIndex ?? index + 1;
+    const workerName = descriptor?.workerName ?? `worker-${workerIndex}`;
+    const error = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
+    return { ok: false, workerIndex, workerName, error };
+  });
+}
+
 export async function startTeam(
   teamName: string,
   task: string,
@@ -2354,33 +2379,44 @@ export async function startTeam(
     }
     await saveTeamConfig(config, leaderCwd);
 
-    // 7. Wait for all workers to be ready (interactive mode), then bootstrap them
+    // 7. Start all safe per-worker readiness/dispatch attempts concurrently.
+    // Pane creation and worktree provisioning above remain dependency-bound and
+    // ordered; readiness polling and startup dispatch must not let worker-1
+    // block later workers from receiving their own startup attempts.
     const manifest = await readTeamManifestV2(sanitized, leaderCwd);
     const dispatchPolicy = resolveDispatchPolicy(manifest?.policy, workerLaunchMode);
-    for (let i = 1; i <= workerCount; i++) {
-      const bootstrapPlan = workerBootstrapPlans[i - 1];
+    const runWorkerStartupAttempt = async (workerIndex: number): Promise<StartupAttemptResult> => {
+      const bootstrapPlan = workerBootstrapPlans[workerIndex - 1];
       if (!bootstrapPlan) {
-        throw new Error(`missing bootstrap plan for worker-${i}`);
-      }
-      const { workerName, paneId, workerTasks, inbox, trigger, triggerIntent, initialPrompt } = {
-        workerName: bootstrapPlan.workerName,
-        paneId: workerPaneIds[i - 1],
-        workerTasks: bootstrapPlan.workerTasks,
-        inbox: bootstrapPlan.inbox,
-        trigger: bootstrapPlan.trigger,
-        triggerIntent: bootstrapPlan.triggerIntent,
-        initialPrompt: bootstrapPlan.initialPrompt,
-      };
-
-      if (workerTasks.map(t => t.role).filter(Boolean).length > 0 && new Set(workerTasks.map(t => t.role).filter(Boolean)).size > 1) {
-        console.log(`[omx:team] ${workerName}: mixed task roles [${[...new Set(workerTasks.map(t => t.role).filter(Boolean))].join(', ')}], falling back to ${agentType}`);
+        return {
+          ok: false,
+          workerIndex,
+          workerName: `worker-${workerIndex}`,
+          error: new Error(`missing bootstrap plan for worker-${workerIndex}`),
+        };
       }
 
-      // Wait for worker readiness
+      const workerName = bootstrapPlan.workerName;
+      const paneId = workerPaneIds[workerIndex - 1];
+      const workerTasks = bootstrapPlan.workerTasks;
+      const inbox = bootstrapPlan.inbox;
+      const trigger = bootstrapPlan.trigger;
+      const triggerIntent = bootstrapPlan.triggerIntent;
+      const initialPrompt = bootstrapPlan.initialPrompt;
+
+      const taskRoles = workerTasks
+        .map((task) => task.role)
+        .filter((role): role is string => Boolean(role));
+      const uniqueTaskRoles = [...new Set(taskRoles)];
+      if (uniqueTaskRoles.length > 1) {
+        console.log(`[omx:team] ${workerName}: mixed task roles [${uniqueTaskRoles.join(', ')}], falling back to ${agentType}`);
+      }
+
+
       if (workerLaunchMode === 'interactive' && !skipWorkerReadyWait && !initialPrompt) {
-        const ready = waitForWorkerReady(sessionName, i, workerReadyTimeoutMs, paneId);
+        const ready = await waitForWorkerReadyAsync(sessionName, workerIndex, workerReadyTimeoutMs, paneId);
         if (!ready) {
-          const workerAlive = isWorkerPaneOpen(sessionName, i, paneId);
+          const workerAlive = isWorkerPaneOpen(sessionName, workerIndex, paneId);
           if (workerAlive) {
             await recordRecoverableStartupIssue({
               teamName: sanitized,
@@ -2389,15 +2425,17 @@ export async function startTeam(
               reason: 'ready_prompt_timeout',
               cwd: leaderCwd,
             });
-            continue;
+            return { ok: true, workerIndex, workerName };
           }
-          throw new Error(`Worker ${workerName} did not become ready in tmux session ${sessionName}`);
+          return {
+            ok: false,
+            workerIndex,
+            workerName,
+            error: new Error(`Worker ${workerName} did not become ready in tmux session ${sessionName}`),
+          };
         }
       }
 
-      // Queue inbox via MCP/state then notify worker via tmux transport.
-      // Retry dispatch up to 3 times to handle Codex trust prompts that may
-      // block the worker pane during startup (fixes #393).
       let dispatchOutcome: DispatchOutcome = initialPrompt
         ? { ok: true, transport: 'none', reason: 'startup_prompt_delivered_at_launch' }
         : { ok: false, transport: 'none', reason: 'not_attempted' };
@@ -2407,9 +2445,9 @@ export async function startTeam(
             teamName: sanitized,
             config: config!,
             workerName,
-            workerIndex: i,
+            workerIndex,
             paneId,
-            workerCli: workerCliPlan[i - 1],
+            workerCli: workerCliPlan[workerIndex - 1],
             inbox,
             triggerMessage: trigger,
             intent: triggerIntent,
@@ -2421,23 +2459,23 @@ export async function startTeam(
           });
           if (dispatchOutcome.ok) break;
           if (attempt < startupDispatchRetries) {
-            // Check for trust prompt blocking the worker and dismiss it before retry
             if (workerLaunchMode === 'interactive') {
-              if (dismissTrustPromptIfPresent(sessionName, i, paneId)) {
-                waitForWorkerReady(sessionName, i, workerReadyTimeoutMs, paneId);
+              if (dismissTrustPromptIfPresent(sessionName, workerIndex, paneId)) {
+                await waitForWorkerReadyAsync(sessionName, workerIndex, workerReadyTimeoutMs, paneId);
               } else {
-                sleepFractionalSeconds(startupRetryDelayS);
+                await new Promise((resolve) => setTimeout(resolve, Math.max(0, startupRetryDelayS * 1000)));
               }
             } else {
-              sleepFractionalSeconds(startupRetryDelayS);
+              await new Promise((resolve) => setTimeout(resolve, Math.max(0, startupRetryDelayS * 1000)));
             }
           }
+        }
       }
-      }
+
       if (!dispatchOutcome.ok) {
         const workerAlive = workerLaunchMode === 'prompt'
-          ? isPromptWorkerAlive(config, config.workers[i - 1]!)
-          : isWorkerPaneOpen(sessionName, i, paneId);
+          ? isPromptWorkerAlive(config!, config!.workers[workerIndex - 1]!)
+          : isWorkerPaneOpen(sessionName, workerIndex, paneId);
         if (
           workerLaunchMode === 'interactive'
           && workerAlive
@@ -2450,10 +2488,36 @@ export async function startTeam(
             reason: dispatchOutcome.reason,
             cwd: leaderCwd,
           });
-          continue;
+          return { ok: true, workerIndex, workerName };
         }
-        throw new Error(`worker_notify_failed:${workerName}:${dispatchOutcome.reason}`);
+        return {
+          ok: false,
+          workerIndex,
+          workerName,
+          error: new Error(`worker_notify_failed:${workerName}:${dispatchOutcome.reason}`),
+        };
       }
+
+      return { ok: true, workerIndex, workerName };
+    };
+
+    const startupAttemptResults = await settleStartupAttemptResults(
+      Array.from({ length: workerCount }, (_, index) => {
+        const workerIndex = index + 1;
+        const bootstrapPlan = workerBootstrapPlans[index];
+        const workerName = bootstrapPlan?.workerName ?? `worker-${workerIndex}`;
+        return {
+          workerIndex,
+          workerName,
+          attempt: runWorkerStartupAttempt(workerIndex),
+        };
+      }),
+    );
+    const firstStartupError = startupAttemptResults
+      .filter((result): result is Extract<StartupAttemptResult, { ok: false }> => !result.ok)
+      .sort((a, b) => a.workerIndex - b.workerIndex)[0];
+    if (firstStartupError) {
+      throw firstStartupError.error;
     }
     await saveTeamConfig(config, leaderCwd);
 
