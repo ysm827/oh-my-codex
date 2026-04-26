@@ -4,26 +4,15 @@ import { join, resolve } from 'path'
 import type { TeamTask } from './state.js'
 import { writeAtomic } from './state.js'
 
-export const TEAM_OPERATIONAL_COMMIT_KINDS = [
-  'auto_checkpoint',
-  'integration_merge',
-  'integration_cherry_pick',
-  'cross_rebase',
-  'worker_clean_rebase',
-  'leader_integration_attempt',
-  'shutdown_checkpoint',
-  'shutdown_merge',
-] as const
-
-export const TEAM_OPERATIONAL_COMMIT_STATUSES = [
-  'applied',
-  'noop',
-  'conflict',
-  'skipped',
-] as const
-
-export type TeamOperationalCommitKind = typeof TEAM_OPERATIONAL_COMMIT_KINDS[number]
-export type TeamOperationalCommitStatus = typeof TEAM_OPERATIONAL_COMMIT_STATUSES[number]
+export type TeamOperationalCommitKind =
+  | 'auto_checkpoint'
+  | 'integration_merge'
+  | 'integration_cherry_pick'
+  | 'cross_rebase'
+  | 'worker_clean_rebase'
+  | 'leader_integration_attempt'
+  | 'shutdown_checkpoint'
+  | 'shutdown_merge'
 
 export interface TeamOperationalCommitEntry {
   recorded_at: string;
