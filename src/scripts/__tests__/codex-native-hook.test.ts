@@ -440,6 +440,164 @@ describe("codex native hook dispatch", () => {
     }
   });
 
+  it("keeps subagent SessionStart from replacing the canonical leader session", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-subagent-session-start-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const canonicalSessionId = "omx-leader-session";
+      const leaderNativeSessionId = "codex-leader-thread";
+      const childNativeSessionId = "codex-child-thread";
+      await mkdir(join(stateDir, "sessions", canonicalSessionId), { recursive: true });
+      await writeSessionStart(cwd, canonicalSessionId, {
+        nativeSessionId: leaderNativeSessionId,
+      });
+      await writeJson(join(stateDir, "sessions", canonicalSessionId, "ralph-state.json"), {
+        active: true,
+        mode: "ralph",
+        current_phase: "executing",
+        iteration: 1,
+        max_iterations: 5,
+      });
+      const transcriptPath = join(cwd, "subagent-rollout.jsonl");
+      await writeFile(
+        transcriptPath,
+        `${JSON.stringify({
+          type: "session_meta",
+          payload: {
+            id: childNativeSessionId,
+            source: {
+              subagent: {
+                thread_spawn: {
+                  parent_thread_id: leaderNativeSessionId,
+                  depth: 1,
+                  agent_nickname: "Hegel",
+                  agent_role: "critic",
+                },
+              },
+            },
+            agent_nickname: "Hegel",
+            agent_role: "critic",
+          },
+        })}\n`,
+      );
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "SessionStart",
+          cwd,
+          session_id: childNativeSessionId,
+          transcript_path: transcriptPath,
+        },
+        { cwd, sessionOwnerPid: process.pid },
+      );
+
+      const sessionState = JSON.parse(
+        await readFile(join(stateDir, "session.json"), "utf-8"),
+      ) as { session_id?: string; native_session_id?: string };
+      assert.equal(sessionState.session_id, canonicalSessionId);
+      assert.equal(sessionState.native_session_id, leaderNativeSessionId);
+      assert.equal(
+        existsSync(join(stateDir, "sessions", childNativeSessionId, "ralph-state.json")),
+        false,
+      );
+      assert.ok(result.outputJson);
+
+      const leaderRalph = JSON.parse(
+        await readFile(join(stateDir, "sessions", canonicalSessionId, "ralph-state.json"), "utf-8"),
+      ) as { active?: boolean; current_phase?: string };
+      assert.equal(leaderRalph.active, true);
+      assert.equal(leaderRalph.current_phase, "executing");
+
+      const tracking = JSON.parse(
+        await readFile(join(stateDir, "subagent-tracking.json"), "utf-8"),
+      ) as {
+        sessions?: Record<string, {
+          leader_thread_id?: string;
+          threads?: Record<string, { kind?: string; mode?: string }>;
+        }>;
+      };
+      assert.equal(tracking.sessions?.[canonicalSessionId]?.leader_thread_id, leaderNativeSessionId);
+      assert.equal(tracking.sessions?.[canonicalSessionId]?.threads?.[childNativeSessionId]?.kind, "subagent");
+      assert.equal(tracking.sessions?.[canonicalSessionId]?.threads?.[childNativeSessionId]?.mode, "critic");
+      assert.equal(tracking.sessions?.[leaderNativeSessionId]?.leader_thread_id, leaderNativeSessionId);
+      assert.equal(tracking.sessions?.[leaderNativeSessionId]?.threads?.[childNativeSessionId]?.kind, "subagent");
+      assert.equal(tracking.sessions?.[leaderNativeSessionId]?.threads?.[childNativeSessionId]?.mode, "critic");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not attach a subagent SessionStart to an unrelated canonical leader", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-subagent-session-start-mismatch-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const canonicalSessionId = "omx-leader-session-a";
+      const leaderNativeSessionId = "codex-leader-thread-a";
+      const unrelatedParentNativeSessionId = "codex-leader-thread-b";
+      const childNativeSessionId = "codex-child-thread-b";
+      await mkdir(join(stateDir, "sessions", canonicalSessionId), { recursive: true });
+      await writeSessionStart(cwd, canonicalSessionId, {
+        nativeSessionId: leaderNativeSessionId,
+      });
+      await writeJson(join(stateDir, "sessions", canonicalSessionId, "ralph-state.json"), {
+        active: true,
+        mode: "ralph",
+        current_phase: "executing",
+        iteration: 1,
+        max_iterations: 5,
+      });
+      const transcriptPath = join(cwd, "unrelated-subagent-rollout.jsonl");
+      await writeFile(
+        transcriptPath,
+        `${JSON.stringify({
+          type: "session_meta",
+          payload: {
+            id: childNativeSessionId,
+            source: {
+              subagent: {
+                thread_spawn: {
+                  parent_thread_id: unrelatedParentNativeSessionId,
+                  depth: 1,
+                  agent_nickname: "Spinoza",
+                  agent_role: "critic",
+                },
+              },
+            },
+            agent_nickname: "Spinoza",
+            agent_role: "critic",
+          },
+        })}\n`,
+      );
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "SessionStart",
+          cwd,
+          session_id: childNativeSessionId,
+          transcript_path: transcriptPath,
+        },
+        { cwd, sessionOwnerPid: process.pid },
+      );
+
+      const sessionState = JSON.parse(
+        await readFile(join(stateDir, "session.json"), "utf-8"),
+      ) as { session_id?: string; native_session_id?: string };
+      assert.equal(sessionState.session_id, canonicalSessionId);
+      assert.equal(sessionState.native_session_id, leaderNativeSessionId);
+      assert.equal(existsSync(join(stateDir, "subagent-tracking.json")), false);
+      assert.equal(existsSync(join(stateDir, "sessions", childNativeSessionId)), false);
+      assert.equal(result.outputJson, null);
+
+      const leaderRalph = JSON.parse(
+        await readFile(join(stateDir, "sessions", canonicalSessionId, "ralph-state.json"), "utf-8"),
+      ) as { active?: boolean; current_phase?: string };
+      assert.equal(leaderRalph.active, true);
+      assert.equal(leaderRalph.current_phase, "executing");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("describes attached tmux runtime in SessionStart context when TMUX is present", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-session-start-tmux-"));
     process.env.TMUX = "/tmp/tmux-attached";

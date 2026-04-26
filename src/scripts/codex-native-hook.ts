@@ -1,5 +1,5 @@
 import { execFileSync } from "child_process";
-import { existsSync, readFileSync } from "fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync } from "fs";
 import { mkdir, readFile, readdir, writeFile } from "fs/promises";
 import { join, resolve } from "path";
 import { pathToFileURL } from "url";
@@ -8,13 +8,18 @@ import {
   listActiveSkills,
   readVisibleSkillActiveState,
 } from "../state/skill-active.js";
-import { readSubagentSessionSummary } from "../subagents/tracker.js";
+import {
+  readSubagentSessionSummary,
+  recordSubagentTurnForSession,
+} from "../subagents/tracker.js";
 import { resolveCanonicalTeamStateRoot } from "../team/state-root.js";
 import {
+  appendToLog,
   isSessionStateUsable,
   readSessionState,
   readUsableSessionState,
   reconcileNativeSessionStart,
+  type SessionState,
 } from "../hooks/session.js";
 import {
   appendTeamEvent,
@@ -122,6 +127,7 @@ const SHORT_FOLLOWUP_PRIORITY_PATTERNS = [
   /(?:按照|按|基于)(?:这个|上述|当前)?(?:plan|计划|方案)/u,
   /\b(?:follow up|latest request|this turn|current turn|newest request)\b/i,
 ] as const;
+const MAX_SESSION_META_LINE_BYTES = 256 * 1024;
 
 function safeString(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -129,6 +135,144 @@ function safeString(value: unknown): string {
 
 function safeObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+interface NativeSubagentSessionStartMetadata {
+  parentThreadId: string;
+  agentNickname?: string;
+  agentRole?: string;
+}
+
+function readBoundedFirstLineSync(path: string): string {
+  const fd = openSync(path, "r");
+  try {
+    const chunks: Buffer[] = [];
+    const buffer = Buffer.alloc(Math.min(8192, MAX_SESSION_META_LINE_BYTES));
+    let totalBytesRead = 0;
+
+    while (totalBytesRead < MAX_SESSION_META_LINE_BYTES) {
+      const bytesToRead = Math.min(buffer.length, MAX_SESSION_META_LINE_BYTES - totalBytesRead);
+      const bytesRead = readSync(fd, buffer, 0, bytesToRead, totalBytesRead);
+      if (bytesRead <= 0) break;
+
+      totalBytesRead += bytesRead;
+      const chunk = buffer.subarray(0, bytesRead);
+      const newlineOffset = chunk.indexOf(0x0a);
+      if (newlineOffset >= 0) {
+        chunks.push(Buffer.from(chunk.subarray(0, newlineOffset)));
+        break;
+      }
+      chunks.push(Buffer.from(chunk));
+    }
+
+    return Buffer.concat(chunks).toString("utf-8").replace(/\r$/, "");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function readNativeSubagentSessionStartMetadata(transcriptPath: string): NativeSubagentSessionStartMetadata | null {
+  const normalizedPath = transcriptPath.trim();
+  if (!normalizedPath) return null;
+
+  try {
+    const firstLine = readBoundedFirstLineSync(normalizedPath).trim();
+    if (!firstLine) return null;
+    const firstRecord = safeObject(JSON.parse(firstLine));
+    if (safeString(firstRecord.type) !== "session_meta") return null;
+
+    const payload = safeObject(firstRecord.payload);
+    const source = safeObject(payload.source);
+    const subagent = safeObject(source.subagent);
+    const threadSpawn = safeObject(subagent.thread_spawn);
+    const parentThreadId = safeString(threadSpawn.parent_thread_id).trim();
+    if (!parentThreadId) return null;
+
+    const agentNickname = safeString(threadSpawn.agent_nickname ?? payload.agent_nickname).trim();
+    const agentRole = safeString(threadSpawn.agent_role ?? payload.agent_role).trim();
+    return {
+      parentThreadId,
+      ...(agentNickname ? { agentNickname } : {}),
+      ...(agentRole ? { agentRole } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function recordNativeSubagentSessionStart(
+  cwd: string,
+  canonicalSessionId: string,
+  childSessionId: string,
+  metadata: NativeSubagentSessionStartMetadata,
+  transcriptPath: string,
+): Promise<void> {
+  const trackingSessionIds = [...new Set([
+    canonicalSessionId.trim(),
+    metadata.parentThreadId.trim(),
+  ].filter(Boolean))];
+  for (const sessionId of trackingSessionIds) {
+    await recordSubagentTurnForSession(cwd, {
+      sessionId,
+      threadId: metadata.parentThreadId,
+    }).catch(() => {});
+    await recordSubagentTurnForSession(cwd, {
+      sessionId,
+      threadId: childSessionId,
+      mode: metadata.agentRole,
+    }).catch(() => {});
+  }
+  await appendToLog(cwd, {
+    event: "subagent_session_start",
+    session_id: canonicalSessionId,
+    native_owner_session_id: metadata.parentThreadId,
+    native_session_id: childSessionId,
+    parent_thread_id: metadata.parentThreadId,
+    ...(metadata.agentNickname ? { agent_nickname: metadata.agentNickname } : {}),
+    ...(metadata.agentRole ? { agent_role: metadata.agentRole } : {}),
+    ...(transcriptPath ? { transcript_path: transcriptPath } : {}),
+    timestamp: new Date().toISOString(),
+  }).catch(() => {});
+}
+
+async function nativeSubagentSessionStartBelongsToCanonicalSession(
+  cwd: string,
+  canonicalSessionId: string,
+  currentSessionState: SessionState | null,
+  metadata: NativeSubagentSessionStartMetadata,
+): Promise<boolean> {
+  const parentThreadId = metadata.parentThreadId.trim();
+  if (!parentThreadId) return false;
+
+  const currentNativeSessionId = safeString(currentSessionState?.native_session_id).trim();
+  if (currentNativeSessionId && currentNativeSessionId === parentThreadId) {
+    return true;
+  }
+
+  const summary = await readSubagentSessionSummary(cwd, canonicalSessionId).catch(() => null);
+  if (!summary) return false;
+  if (summary.leaderThreadId === parentThreadId) return true;
+  return summary.allThreadIds.includes(parentThreadId);
+}
+
+async function recordIgnoredNativeSubagentSessionStart(
+  cwd: string,
+  canonicalSessionId: string,
+  childSessionId: string,
+  metadata: NativeSubagentSessionStartMetadata,
+  transcriptPath: string,
+): Promise<void> {
+  await appendToLog(cwd, {
+    event: "subagent_session_start_ignored",
+    reason: "parent_not_in_canonical_session",
+    session_id: canonicalSessionId,
+    native_session_id: childSessionId,
+    parent_thread_id: metadata.parentThreadId,
+    ...(metadata.agentNickname ? { agent_nickname: metadata.agentNickname } : {}),
+    ...(metadata.agentRole ? { agent_role: metadata.agentRole } : {}),
+    ...(transcriptPath ? { transcript_path: transcriptPath } : {}),
+    timestamp: new Date().toISOString(),
+  }).catch(() => {});
 }
 
 function safePositiveInteger(value: unknown): number | null {
@@ -1903,13 +2047,46 @@ export async function dispatchCodexNativeHook(
   const currentSessionState = await readUsableSessionState(cwd);
   let canonicalSessionId = safeString(currentSessionState?.session_id).trim();
   let resolvedNativeSessionId = nativeSessionId;
+  let skipCanonicalSessionStartContext = false;
 
   if (hookEventName === "SessionStart" && nativeSessionId) {
-    const sessionState = await reconcileNativeSessionStart(cwd, nativeSessionId, {
-      pid: options.sessionOwnerPid ?? resolveSessionOwnerPid(payload),
-    });
-    canonicalSessionId = safeString(sessionState.session_id).trim();
-    resolvedNativeSessionId = safeString(sessionState.native_session_id).trim() || nativeSessionId;
+    const transcriptPath = safeString(payload.transcript_path ?? payload.transcriptPath).trim();
+    const subagentSessionStart = readNativeSubagentSessionStartMetadata(transcriptPath);
+    if (subagentSessionStart && canonicalSessionId) {
+      const belongsToCanonicalSession = await nativeSubagentSessionStartBelongsToCanonicalSession(
+        cwd,
+        canonicalSessionId,
+        currentSessionState,
+        subagentSessionStart,
+      );
+      if (belongsToCanonicalSession) {
+        resolvedNativeSessionId = nativeSessionId;
+        await recordNativeSubagentSessionStart(
+          cwd,
+          canonicalSessionId,
+          nativeSessionId,
+          subagentSessionStart,
+          transcriptPath,
+        );
+      } else {
+        skipCanonicalSessionStartContext = true;
+        resolvedNativeSessionId =
+          safeString(currentSessionState?.native_session_id).trim() || nativeSessionId;
+        await recordIgnoredNativeSubagentSessionStart(
+          cwd,
+          canonicalSessionId,
+          nativeSessionId,
+          subagentSessionStart,
+          transcriptPath,
+        );
+      }
+    } else {
+      const sessionState = await reconcileNativeSessionStart(cwd, nativeSessionId, {
+        pid: options.sessionOwnerPid ?? resolveSessionOwnerPid(payload),
+      });
+      canonicalSessionId = safeString(sessionState.session_id).trim();
+      resolvedNativeSessionId = safeString(sessionState.native_session_id).trim() || nativeSessionId;
+    }
   } else if (!canonicalSessionId) {
     canonicalSessionId = safeString(currentSessionState?.session_id).trim();
   }
@@ -2024,7 +2201,7 @@ export async function dispatchCodexNativeHook(
     await reconcileHudForPromptSubmitFn(cwd, { sessionId: canonicalSessionId || sessionIdForState || undefined }).catch(() => {});
   }
 
-  if (omxEventName) {
+  if (omxEventName && !skipCanonicalSessionStartContext) {
     const baseContext = buildBaseContext(cwd, payload, hookEventName!, canonicalSessionId);
     if (resolvedNativeSessionId) {
       baseContext.native_session_id = resolvedNativeSessionId;
@@ -2046,7 +2223,7 @@ export async function dispatchCodexNativeHook(
     await dispatchHookEvent(event, { cwd });
   }
 
-  if (hookEventName === "SessionStart" || hookEventName === "UserPromptSubmit") {
+  if ((hookEventName === "SessionStart" && !skipCanonicalSessionStartContext) || hookEventName === "UserPromptSubmit") {
     const additionalContext = hookEventName === "SessionStart"
       ? await buildSessionStartContext(cwd, canonicalSessionId || nativeSessionId, {
         hookEventName,
