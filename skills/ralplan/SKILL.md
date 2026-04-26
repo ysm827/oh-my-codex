@@ -38,7 +38,7 @@ $plan --consensus --interactive <arguments>
 ```
 
 The consensus workflow:
-1. **Planner** creates initial plan and a compact **RALPLAN-DR summary** before review:
+1. **Planner** creates an adaptive plan (right-sized to task scope; do not default to exactly five steps) and a compact **RALPLAN-DR summary** before review:
    - Principles (3-5)
    - Decision Drivers (top 3)
    - Viable Options (>=2) with bounded pros/cons
