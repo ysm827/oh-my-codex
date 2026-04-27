@@ -176,10 +176,7 @@ fn print_attempt_output_with_optional_fallback(
 }
 
 fn emit_model_fallback_event(event: &FallbackEvent) {
-    eprintln!(
-        "[omx explore] fallback=model from=`{}` to=`{}` reason=spark_attempt_failed exit={}. Cost/behavior boundary changed; output includes a fallback notice.",
-        event.from_model, event.to_model, event.exit_code
-    );
+    eprintln!("{}", fallback_attempt_event_message(event));
     eprintln!(
         "[omx explore] spark model `{}` unavailable or failed (exit {}). Falling back to `{}`.",
         event.from_model, event.exit_code, event.to_model
@@ -187,6 +184,13 @@ fn emit_model_fallback_event(event: &FallbackEvent) {
     if !event.stderr.trim().is_empty() {
         eprintln!("[omx explore] spark stderr: {}", event.stderr.trim());
     }
+}
+
+fn fallback_attempt_event_message(event: &FallbackEvent) -> String {
+    format!(
+        "[omx explore] fallback-attempt=model from=`{}` to=`{}` reason=spark_attempt_failed exit={}. Cost/behavior boundary changed if fallback succeeds; stdout fallback notice is emitted only after successful fallback output.",
+        event.from_model, event.to_model, event.exit_code
+    )
 }
 
 fn fallback_output_notice(event: &FallbackEvent) -> String {
@@ -2005,14 +2009,34 @@ printf '# Answer\nok\n' > "$output_path"
         assert_eq!(read_to_string(&bash_env_log).unwrap_or_default(), "");
     }
 
-    #[test]
-    fn fallback_output_notice_records_model_boundary() {
-        let event = FallbackEvent {
+    fn fallback_test_event() -> FallbackEvent {
+        FallbackEvent {
             from_model: "spark-model".to_string(),
             to_model: "fallback-model".to_string(),
             exit_code: 17,
             stderr: "spark timed out".to_string(),
-        };
+        }
+    }
+
+    #[test]
+    fn fallback_attempt_event_distinguishes_attempt_from_output_notice() {
+        let event = fallback_test_event();
+
+        let message = fallback_attempt_event_message(&event);
+        assert!(message.contains("fallback-attempt=model"));
+        assert!(message.contains("from=`spark-model`"));
+        assert!(message.contains("to=`fallback-model`"));
+        assert!(message.contains("spark_attempt_failed exit=17"));
+        assert!(message.contains(
+            "stdout fallback notice is emitted only after successful fallback output"
+        ));
+        assert!(!message.contains("output includes a fallback notice"));
+        assert!(!message.contains("## OMX Explore fallback"));
+    }
+
+    #[test]
+    fn fallback_output_notice_records_model_boundary() {
+        let event = fallback_test_event();
 
         let notice = fallback_output_notice(&event);
         assert!(notice.contains("## OMX Explore fallback"));
