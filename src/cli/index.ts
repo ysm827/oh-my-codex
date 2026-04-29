@@ -158,7 +158,7 @@ export const HELP = `
 oh-my-codex (omx) - Multi-agent orchestration for Codex CLI
 
 Usage:
-  omx           Launch Codex CLI (HUD auto-attaches only when already inside tmux)
+  omx           Launch Codex CLI (detached tmux by default on supported interactive terminals)
   omx exec      Run codex exec non-interactively with OMX AGENTS/overlay injection
   omx exec inject <session-id> --prompt <text>
                 Queue audited follow-up instructions for a running non-interactive exec job
@@ -220,6 +220,7 @@ Options:
   --madmax-spark  spark model for workers + bypass approvals for leader and workers
                 (shorthand for: --spark --madmax)
   --notify-temp  Enable temporary notification routing for this run/session only
+  --direct       Launch the interactive leader directly without OMX tmux/HUD management
   --tmux         Launch the interactive leader session in detached tmux
   --discord      Select Discord provider for temporary notification mode
   --slack        Select Slack provider for temporary notification mode
@@ -242,6 +243,19 @@ Options:
   --verbose     Show detailed output
   --scope       Setup scope for "omx setup" only:
                 user | project
+
+Launch policy:
+  OMX_LAUNCH_POLICY=direct|tmux|detached-tmux|auto
+                Choose the default leader launch policy when no CLI policy flag is present
+  unset OMX_LAUNCH_POLICY
+                Return to the auto/default policy (detached tmux on supported interactive terminals)
+  omx --direct --yolo
+                Run this launch without OMX tmux/HUD management
+  OMX_LAUNCH_POLICY=direct omx --yolo
+                Use direct launch from the environment
+  OMX_LAUNCH_POLICY=direct omx --tmux --yolo
+                CLI policy flags override the environment for one launch
+  Config files are intentionally not used for launch policy in this release.
 `;
 
 const REASONING_KEY = "model_reasoning_effort";
@@ -463,6 +477,9 @@ export function commandOwnsLocalHelp(command: CliCommand): boolean {
 
 export type CodexLaunchPolicy = "inside-tmux" | "detached-tmux" | "direct";
 
+const OMX_LAUNCH_POLICY_ENV = "OMX_LAUNCH_POLICY";
+let warnedInvalidEnvLaunchPolicy = false;
+
 function splitLeaderLaunchPolicyArgs(args: string[]): {
   explicitPolicy?: CodexLaunchPolicy;
   remainingArgs: string[];
@@ -483,6 +500,11 @@ function splitLeaderLaunchPolicyArgs(args: string[]): {
       continue;
     }
 
+    if (arg === "--direct") {
+      explicitPolicy = "direct";
+      continue;
+    }
+
     if (arg === "--tmux") {
       explicitPolicy = "detached-tmux";
       continue;
@@ -500,6 +522,36 @@ export function resolveLeaderLaunchPolicyOverride(
   return splitLeaderLaunchPolicyArgs(args).explicitPolicy;
 }
 
+export function resolveEnvLaunchPolicyOverride(
+  env: NodeJS.ProcessEnv = process.env,
+): CodexLaunchPolicy | undefined {
+  const rawValue = env[OMX_LAUNCH_POLICY_ENV]?.trim();
+  if (!rawValue) return undefined;
+
+  const value = rawValue.toLowerCase();
+  if (value === "auto") return undefined;
+  if (value === "direct") return "direct";
+  if (value === "tmux" || value === "detached-tmux") return "detached-tmux";
+
+  if (!warnedInvalidEnvLaunchPolicy) {
+    warnedInvalidEnvLaunchPolicy = true;
+    console.warn(
+      `[omx] warning: invalid ${OMX_LAUNCH_POLICY_ENV}="${rawValue}". ` +
+        "Expected direct, tmux, detached-tmux, or auto. Falling back to auto/default launch policy.",
+    );
+  }
+  return undefined;
+}
+
+export function resolveEffectiveLeaderLaunchPolicyOverride(
+  args: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): CodexLaunchPolicy | undefined {
+  return (
+    resolveLeaderLaunchPolicyOverride(args) ?? resolveEnvLaunchPolicyOverride(env)
+  );
+}
+
 export function resolveCodexLaunchPolicy(
   env: NodeJS.ProcessEnv = process.env,
   _platform: NodeJS.Platform = process.platform,
@@ -509,9 +561,9 @@ export function resolveCodexLaunchPolicy(
   stdoutIsTTY: boolean = Boolean(process.stdout.isTTY),
   explicitPolicy?: CodexLaunchPolicy,
 ): CodexLaunchPolicy {
+  if (explicitPolicy === "direct") return "direct";
   if (env.TMUX) return "inside-tmux";
   if (explicitPolicy === "detached-tmux") return tmuxAvailable ? "detached-tmux" : "direct";
-  if (explicitPolicy === "direct") return "direct";
   if (_platform === "win32") return "direct";
   if (nativeWindows) return "direct";
   if (!stdinIsTTY || !stdoutIsTTY) return "direct";
@@ -572,7 +624,10 @@ function tmuxFailureMessage(error: unknown): string {
 }
 
 function isBenignMissingTmuxServerMessage(message: string): boolean {
-  return /no server running/i.test(message);
+  return (
+    /no server running/i.test(message) ||
+    /error connecting to .*\(No such file or directory\)/i.test(message)
+  );
 }
 
 export interface TmuxLaunchHealth {
@@ -1066,8 +1121,9 @@ export async function launchWithHud(args: string[]): Promise<void> {
     parsedWorktree.remainingArgs,
     process.env,
   );
-  const explicitLaunchPolicy = resolveLeaderLaunchPolicyOverride(
+  const explicitLaunchPolicy = resolveEffectiveLeaderLaunchPolicyOverride(
     notifyTempResult.passthroughArgs,
+    process.env,
   );
   const codexHomeOverride = resolveCodexHomeForLaunch(launchCwd, process.env);
   const projectLocalCodexHomeForCleanup = resolveProjectLocalCodexHomeForLaunch(launchCwd, process.env);
