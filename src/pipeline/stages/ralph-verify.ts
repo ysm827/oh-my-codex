@@ -12,6 +12,9 @@ import {
 } from '../../team/followup-planner.js';
 
 export interface RalphVerifyStageOptions {
+  /** Stage name. Strict Autopilot uses 'ralph'; legacy pipeline adapters use 'ralph-verify'. */
+  stageName?: string;
+
   /**
    * Maximum number of ralph verification iterations.
    * Defaults to 10.
@@ -23,8 +26,8 @@ export interface RalphVerifyStageOptions {
  * Create a ralph-verify pipeline stage.
  *
  * This stage wraps the ralph persistence loop for the verification phase
- * of the pipeline. It takes the execution results from team-exec and
- * orchestrates architect-verified completion.
+ * of legacy pipelines. Strict Autopilot uses `createRalphStage()` for the
+ * implementation/verification phase before code-review.
  *
  * The iteration count is configurable, addressing issue #396 requirement
  * for configurable ralph iteration count.
@@ -33,14 +36,14 @@ export function createRalphVerifyStage(options: RalphVerifyStageOptions = {}): P
   const maxIterations = options.maxIterations ?? 10;
 
   return {
-    name: 'ralph-verify',
+    name: options.stageName ?? 'ralph-verify',
 
     async run(ctx: StageContext): Promise<StageResult> {
       const startTime = Date.now();
 
       try {
         // Extract execution context from previous stage
-        const teamArtifacts = ctx.artifacts['team-exec'] as Record<string, unknown> | undefined;
+        const teamArtifacts = (ctx.artifacts.ralph ?? ctx.artifacts['team-exec']) as Record<string, unknown> | undefined;
         const availableAgentTypes = await resolveAvailableAgentTypes(ctx.cwd);
         const staffingPlan = buildFollowupStaffingPlan('ralph', ctx.task, availableAgentTypes, {
           workerCount: Math.min(maxIterations, 3),
@@ -103,4 +106,9 @@ export interface RalphVerifyDescriptor {
  */
 export function buildRalphInstruction(descriptor: RalphVerifyDescriptor): string {
   return `${descriptor.staffingPlan.launchHints.shellCommand} # max_iterations=${descriptor.maxIterations} # staffing=${descriptor.staffingPlan.staffingSummary} # verify=${descriptor.staffingPlan.verificationPlan.summary}`;
+}
+
+/** Create the strict Autopilot Ralph phase adapter. */
+export function createRalphStage(options: RalphVerifyStageOptions = {}): PipelineStage {
+  return createRalphVerifyStage({ ...options, stageName: 'ralph' });
 }

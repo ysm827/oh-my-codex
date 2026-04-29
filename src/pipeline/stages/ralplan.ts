@@ -22,7 +22,7 @@ export interface CreateRalplanStageOptions {
  *
  * The RALPLAN stage performs consensus planning by coordinating planner,
  * architect, and critic agents. It outputs a plan file that downstream
- * stages (team-exec) consume.
+ * stages consume.
  *
  * By default this remains a structural adapter — actual agent orchestration
  * happens at the skill layer. When an executor is provided, the stage can

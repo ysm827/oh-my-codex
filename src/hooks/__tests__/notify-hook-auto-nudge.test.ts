@@ -1893,7 +1893,7 @@ exit 0
         active: boolean;
       };
       assert.equal(skillState.skill, 'autopilot');
-      assert.equal(skillState.phase, 'planning');
+      assert.equal(skillState.phase, 'ralplan');
       assert.equal(skillState.active, true);
     });
   });

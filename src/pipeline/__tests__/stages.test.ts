@@ -7,7 +7,8 @@ import { existsSync } from 'fs';
 import type { StageContext } from '../types.js';
 import { createRalplanStage } from '../stages/ralplan.js';
 import { createTeamExecStage, buildTeamInstruction } from '../stages/team-exec.js';
-import { createRalphVerifyStage, buildRalphInstruction } from '../stages/ralph-verify.js';
+import { createRalphVerifyStage, createRalphStage, buildRalphInstruction } from '../stages/ralph-verify.js';
+import { createCodeReviewStage, buildCodeReviewInstruction } from '../stages/code-review.js';
 import { buildFollowupStaffingPlan } from '../../team/followup-planner.js';
 
 // ---------------------------------------------------------------------------
@@ -322,5 +323,50 @@ describe('Ralph Verify Stage', () => {
       assert.match(instruction, /^omx ralph /);
       assert.match(instruction, /staffing=/);
     });
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Strict Autopilot stage tests
+// ---------------------------------------------------------------------------
+
+describe('Strict Autopilot Ralph Stage', () => {
+  beforeEach(async () => { await setup(); });
+  afterEach(async () => { await cleanup(); });
+
+  it('uses the strict phase name ralph', () => {
+    assert.equal(createRalphStage().name, 'ralph');
+  });
+});
+
+describe('Code Review Stage', () => {
+  beforeEach(async () => { await setup(); });
+  afterEach(async () => { await cleanup(); });
+
+  it('creates a strict code-review stage with a clean default verdict', async () => {
+    const stage = createCodeReviewStage();
+    assert.equal(stage.name, 'code-review');
+    const result = await stage.run(makeCtx({ artifacts: { ralph: { tests: 'passed' } } }));
+    const artifacts = result.artifacts as Record<string, unknown>;
+    const verdict = artifacts.review_verdict as Record<string, unknown>;
+    assert.equal(result.status, 'completed');
+    assert.equal(verdict.clean, true);
+    assert.equal(verdict.recommendation, 'APPROVE');
+    assert.equal(verdict.architectural_status, 'CLEAR');
+    assert.equal(artifacts.return_to_ralplan_reason, null);
+  });
+
+  it('marks non-clean review as return-to-ralplan input', async () => {
+    const stage = createCodeReviewStage({ recommendation: 'REQUEST CHANGES', architecturalStatus: 'BLOCK', summary: 'fix review findings' });
+    const result = await stage.run(makeCtx());
+    const artifacts = result.artifacts as Record<string, unknown>;
+    const verdict = artifacts.review_verdict as Record<string, unknown>;
+    assert.equal(verdict.clean, false);
+    assert.equal(artifacts.return_to_ralplan_reason, 'fix review findings');
+  });
+
+  it('builds a code-review instruction', () => {
+    assert.match(buildCodeReviewInstruction('review me'), /^\$code-review /);
   });
 });

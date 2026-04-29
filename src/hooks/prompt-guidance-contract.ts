@@ -310,9 +310,15 @@ export const PROMPT_REFACTOR_INVARIANT_CONTRACTS: GuidanceSurfaceContract[] = [
     requiredPatterns: [rx('test'), rx('verify'), rx('fix'), rx('repeat|loop')],
   },
   {
-    id: 'autopilot-completion-loop',
+    id: 'autopilot-strict-3phase-loop',
     path: 'skills/autopilot/SKILL.md',
-    requiredPatterns: [rx('requirements analysis'), rx('implementation'), rx('validation')],
+    requiredPatterns: [
+      rx('\\$ralplan\\s*->\\s*\\$ralph\\s*->\\s*\\$code-review'),
+      rx('return[s]? to `?\\$ralplan`?|current_phase.*ralplan'),
+      rx('review_cycle'),
+      rx('review_verdict'),
+      rx('return_to_ralplan_reason'),
+    ],
   },
   {
     id: 'explore-read-only-role-boundary',
