@@ -543,6 +543,60 @@ function tomlAssignmentKey(line: string): string | undefined {
   return line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/)?.[1];
 }
 
+interface TomlTableEntryRange {
+  key?: string;
+  start: number;
+  end: number;
+}
+
+function findTomlTableEntryRanges(
+  lines: string[],
+  start: number,
+  end: number,
+): TomlTableEntryRange[] {
+  const ranges: TomlTableEntryRange[] = [];
+  let index = start;
+
+  while (index < end) {
+    const key = tomlAssignmentKey(lines[index]);
+    if (key === undefined) {
+      ranges.push({ start: index, end: index + 1 });
+      index += 1;
+      continue;
+    }
+
+    let entryEnd = index + 1;
+    while (
+      !parseStandaloneToml(lines.slice(index, entryEnd).join("\n")) &&
+      entryEnd < end
+    ) {
+      entryEnd += 1;
+    }
+
+    ranges.push({ key, start: index, end: entryEnd });
+    index = entryEnd;
+  }
+
+  return ranges;
+}
+
+function collectTomlTableKeyEntries(
+  lines: string[],
+  range: TomlTableRange,
+): { key: string; lines: string[] }[] {
+  return findTomlTableEntryRanges(lines, range.start + 1, range.end)
+    .filter(
+      (
+        entry,
+      ): entry is TomlTableEntryRange & { key: string } =>
+        entry.key !== undefined,
+    )
+    .map((entry) => ({
+      key: entry.key,
+      lines: lines.slice(entry.start, entry.end),
+    }));
+}
+
 function stripTomlTableKey(
   lines: string[],
   headerPattern: RegExp,
@@ -552,9 +606,15 @@ function stripTomlTableKey(
   if (!range) return lines;
 
   const filtered = [...lines];
-  for (let i = range.end - 1; i > range.start; i--) {
-    if (tomlAssignmentKey(filtered[i]) === keyName) {
-      filtered.splice(i, 1);
+  const entries = findTomlTableEntryRanges(
+    filtered,
+    range.start + 1,
+    range.end,
+  );
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (entry.key === keyName) {
+      filtered.splice(entry.start, entry.end - entry.start);
     }
   }
 
@@ -575,10 +635,7 @@ function upsertEnvSettings(config: string): string {
   const legacyEnvEntries =
     legacyEnvRange === undefined
       ? []
-      : lines
-          .slice(legacyEnvRange.start + 1, legacyEnvRange.end)
-          .filter((line) => tomlAssignmentKey(line) !== undefined)
-          .map((line) => line.trim());
+      : collectTomlTableKeyEntries(lines, legacyEnvRange);
 
   if (legacyEnvRange !== undefined) {
     lines.splice(
@@ -593,10 +650,10 @@ function upsertEnvSettings(config: string): string {
   );
   if (shellEnvSetRange === undefined) {
     const base = lines.join("\n").trimEnd();
-    const envLines = [...legacyEnvEntries];
+    const envLines = legacyEnvEntries.flatMap((entry) => entry.lines);
     if (
-      envLines.every(
-        (line) => tomlAssignmentKey(line) !== OMX_EXPLORE_CMD_ENV,
+      legacyEnvEntries.every(
+        (entry) => entry.key !== OMX_EXPLORE_CMD_ENV,
       )
     ) {
       envLines.push(
@@ -619,11 +676,10 @@ function upsertEnvSettings(config: string): string {
   }
 
   const linesToInsert: string[] = [];
-  for (const line of legacyEnvEntries) {
-    const key = tomlAssignmentKey(line);
-    if (key !== undefined && !shellEnvKeys.has(key)) {
-      linesToInsert.push(line);
-      shellEnvKeys.add(key);
+  for (const entry of legacyEnvEntries) {
+    if (!shellEnvKeys.has(entry.key)) {
+      linesToInsert.push(...entry.lines);
+      shellEnvKeys.add(entry.key);
     }
   }
 
