@@ -123,6 +123,56 @@ describe('omx question CLI', () => {
     assert.equal(payload.prompt.type, 'multi-answerable');
   });
 
+  it('omits legacy prompt and answer projections for batch payloads', async () => {
+    const cwd = await makeRepo();
+    const input = JSON.stringify({
+      header: 'Batch prompt',
+      questions: [
+        { id: 'first', question: 'First?', options: [{ label: 'A', value: 'a' }, { label: 'B', value: 'b' }], allow_other: false },
+        { id: 'second', question: 'Second?', options: [{ label: 'C', value: 'c' }, { label: 'D', value: 'd' }], allow_other: false },
+      ],
+      session_id: 'sess-q',
+    });
+
+    const child = spawn(process.execPath, [omxBin, 'question', '--input', input, '--json'], {
+      cwd,
+      env: { ...process.env, OMX_AUTO_UPDATE: '0', OMX_NOTIFY_FALLBACK: '0', OMX_HOOK_DERIVED_SIGNALS: '0', OMX_QUESTION_TEST_RENDERER: 'noop' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += String(chunk); });
+    child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+    const closePromise = new Promise<number | null>((resolve) => child.on('close', resolve));
+
+    const questionsDir = join(cwd, '.omx', 'state', 'sessions', 'sess-q', 'questions');
+    let recordFile = '';
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      try {
+        const entries = await readdir(questionsDir);
+        recordFile = entries.find((entry) => entry.endsWith('.json')) || '';
+        if (recordFile) break;
+      } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    assert.notEqual(recordFile, '', `expected batch question record file, stderr=${stderr}`);
+    const recordPath = join(questionsDir, recordFile);
+    await markQuestionAnswered(recordPath, [
+      { question_id: 'first', index: 0, answer: { kind: 'option', value: 'a', selected_labels: ['A'], selected_values: ['a'] } },
+      { question_id: 'second', index: 1, answer: { kind: 'option', value: 'd', selected_labels: ['D'], selected_values: ['d'] } },
+    ]);
+
+    const exitCode = await closePromise;
+    assert.equal(exitCode, 0, stderr || stdout);
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.ok, true);
+    assert.deepEqual(payload.answers.map((entry: any) => entry.answer.value), ['a', 'd']);
+    assert.equal(Object.prototype.hasOwnProperty.call(payload, 'answer'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(payload, 'prompt'), false);
+  });
+
   it('fails closed when tmux reports a split pane that does not actually exist', async () => {
     const cwd = await makeRepo();
     const fakeBinDir = join(cwd, 'fake-bin');

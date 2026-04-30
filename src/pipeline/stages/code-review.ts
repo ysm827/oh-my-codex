@@ -49,14 +49,17 @@ export function createCodeReviewStage(options: CodeReviewStageOptions = {}): Pip
         ralphArtifacts: ralphArtifacts ?? {},
         instruction: buildCodeReviewInstruction(ctx.task),
       };
-      const recommendation = options.recommendation ?? 'APPROVE';
-      const architecturalStatus = options.architecturalStatus ?? 'CLEAR';
-      const clean = recommendation === 'APPROVE' && architecturalStatus === 'CLEAR';
+      const hasReviewEvidence = options.recommendation !== undefined || options.architecturalStatus !== undefined;
+      const recommendation = options.recommendation ?? 'REQUEST CHANGES';
+      const architecturalStatus = options.architecturalStatus ?? 'BLOCK';
+      const clean = hasReviewEvidence && recommendation === 'APPROVE' && architecturalStatus === 'CLEAR';
       const verdict: CodeReviewVerdict = {
         recommendation,
         architectural_status: architecturalStatus,
         clean,
-        summary: options.summary ?? (clean ? 'Review clean.' : 'Review returned findings; return to ralplan.'),
+        summary: options.summary ?? (hasReviewEvidence
+          ? (clean ? 'Review clean.' : 'Review returned findings; return to ralplan.')
+          : 'Code-review evidence missing; fail closed and return to ralplan.'),
       };
 
       return {

@@ -224,6 +224,7 @@ export async function questionCommand(args: string[]): Promise<void> {
     return;
   }
 
+  const isSingleQuestion = (finalRecord.questions?.length ?? 0) === 1;
   printJson({
     ok: true,
     question_id: finalRecord.question_id,
@@ -234,7 +235,7 @@ export async function questionCommand(args: string[]): Promise<void> {
       index: 0,
       answer: finalRecord.answer,
     }] : []),
-    ...(finalRecord.answer ? {
+    ...(isSingleQuestion && finalRecord.answer ? {
       prompt: {
         header: finalRecord.header,
         question: finalRecord.question,

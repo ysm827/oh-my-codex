@@ -462,11 +462,7 @@ export async function handleTmuxInjection({
   }), sourceText);
   const preferredPaneTarget = modePane || await resolveManagedCurrentPane(cwd, payload, { allowTeamWorker: false });
   let resolution = preferredModePane
-    ? await resolveCanonicalPaneFromPaneTarget(preferredModePane.pane, cwd).then((resolved) => (
-      resolved.paneTarget
-        ? { ...resolved, reason: 'fallback_mode_state_pane', source: 'mode_state', healTarget: true }
-        : resolved
-    ))
+    ? await resolvePaneTarget({ type: 'pane', value: preferredModePane.pane }, cwd, preferredModePane.pane, cwd, payload)
     : preferredPaneTarget
       ? await resolvePaneTarget({ type: 'pane', value: preferredPaneTarget }, cwd, '', cwd, payload)
       : await resolvePaneTarget(config.target, cwd, modePane, cwd, payload);

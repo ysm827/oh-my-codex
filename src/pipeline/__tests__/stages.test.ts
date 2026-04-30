@@ -401,13 +401,24 @@ describe('Code Review Stage', () => {
   beforeEach(async () => { await setup(); });
   afterEach(async () => { await cleanup(); });
 
-  it('creates a strict code-review stage with a clean default verdict', async () => {
+  it('creates a strict code-review stage that fails closed without review evidence', async () => {
     const stage = createCodeReviewStage();
     assert.equal(stage.name, 'code-review');
     const result = await stage.run(makeCtx({ artifacts: { ralph: { tests: 'passed' } } }));
     const artifacts = result.artifacts as Record<string, unknown>;
     const verdict = artifacts.review_verdict as Record<string, unknown>;
     assert.equal(result.status, 'completed');
+    assert.equal(verdict.clean, false);
+    assert.equal(verdict.recommendation, 'REQUEST CHANGES');
+    assert.equal(verdict.architectural_status, 'BLOCK');
+    assert.equal(artifacts.return_to_ralplan_reason, 'Code-review evidence missing; fail closed and return to ralplan.');
+  });
+
+  it('marks explicit approve and clear review evidence as clean', async () => {
+    const stage = createCodeReviewStage({ recommendation: 'APPROVE', architecturalStatus: 'CLEAR' });
+    const result = await stage.run(makeCtx({ artifacts: { ralph: { tests: 'passed' } } }));
+    const artifacts = result.artifacts as Record<string, unknown>;
+    const verdict = artifacts.review_verdict as Record<string, unknown>;
     assert.equal(verdict.clean, true);
     assert.equal(verdict.recommendation, 'APPROVE');
     assert.equal(verdict.architectural_status, 'CLEAR');

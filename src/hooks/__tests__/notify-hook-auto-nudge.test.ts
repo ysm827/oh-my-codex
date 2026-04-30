@@ -475,7 +475,7 @@ describe('notify-hook auto-nudge', () => {
       });
       assert.equal(result.status, 0, `hook failed: ${result.stderr || result.stdout}`);
 
-      const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
+      const tmuxLog = await readFile(tmuxLogPath, 'utf-8').catch(() => '');
       assert.doesNotMatch(tmuxLog, defaultAutoNudgePattern('%99'));
     });
   });
