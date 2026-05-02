@@ -4,7 +4,13 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { isPlanningComplete, readApprovedExecutionLaunchHint, readPlanningArtifacts, readTeamDagArtifactResolution } from '../artifacts.js';
+import {
+  isPlanningComplete,
+  readApprovedExecutionLaunchHint,
+  readLatestPlanningArtifacts,
+  readPlanningArtifacts,
+  readTeamDagArtifactResolution,
+} from '../artifacts.js';
 import { readTeamDagHandoffForLatestPlan } from '../../team/dag-schema.js';
 
 let tempDir: string;
@@ -105,6 +111,102 @@ describe('planning artifacts', () => {
 
     assert.equal(resolution.source, 'none');
     assert.equal(resolution.planSlug, 'repo-aware');
+    assert.deepEqual(resolution.warnings, ['missing_matching_test_spec']);
+  });
+
+  it('prefers timestamped PRD/test-spec pairs while keeping legacy artifacts compatible', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    const specsDir = join(tempDir, '.omx', 'specs');
+    await mkdir(plansDir, { recursive: true });
+    await mkdir(specsDir, { recursive: true });
+    await writeFile(
+      join(plansDir, 'prd-legacy.md'),
+      '# Legacy\n\nLaunch via omx ralph "Execute legacy plan"\n',
+    );
+    await writeFile(join(plansDir, 'test-spec-legacy.md'), '# Legacy Test Spec\n');
+    await writeFile(
+      join(plansDir, 'prd-20260427T153000Z-alpha.md'),
+      '# Old Alpha\n\nLaunch via omx ralph "Execute old alpha plan"\n',
+    );
+    await writeFile(join(plansDir, 'test-spec-alpha.md'), '# Alpha Legacy Test Spec\n');
+    await writeFile(
+      join(plansDir, 'prd-20260427T153100Z-alpha.md'),
+      '# New Alpha\n\nLaunch via omx ralph "Execute new alpha plan"\n',
+    );
+    await writeFile(join(plansDir, 'test-spec-20260427T153100Z-alpha.md'), '# Alpha Timestamped Test Spec\n');
+    await writeFile(join(specsDir, 'deep-interview-alpha.md'), '# Alpha Legacy Deep Interview\n');
+    await writeFile(join(specsDir, 'deep-interview-20260427T153100Z-alpha.md'), '# Alpha Timestamped Deep Interview\n');
+    await writeFile(join(specsDir, 'deep-interview-autoresearch-20260427T153100Z-alpha.md'), '# Autoresearch Draft\n');
+
+    const selection = readLatestPlanningArtifacts(tempDir);
+    assert.equal(selection.prdPath, join(plansDir, 'prd-20260427T153100Z-alpha.md'));
+    assert.deepEqual(selection.testSpecPaths, [join(plansDir, 'test-spec-20260427T153100Z-alpha.md')]);
+    assert.deepEqual(selection.deepInterviewSpecPaths, [
+      join(specsDir, 'deep-interview-alpha.md'),
+      join(specsDir, 'deep-interview-20260427T153100Z-alpha.md'),
+    ]);
+
+    const hint = readApprovedExecutionLaunchHint(tempDir, 'ralph');
+    assert.ok(hint);
+    assert.equal(hint?.task, 'Execute new alpha plan');
+    assert.deepEqual(hint?.testSpecPaths, [join(plansDir, 'test-spec-20260427T153100Z-alpha.md')]);
+    assert.deepEqual(hint?.deepInterviewSpecPaths, [
+      join(specsDir, 'deep-interview-alpha.md'),
+      join(specsDir, 'deep-interview-20260427T153100Z-alpha.md'),
+    ]);
+
+    const artifacts = readPlanningArtifacts(tempDir);
+    assert.equal(isPlanningComplete(artifacts), true);
+  });
+
+  it('keeps legacy test-spec compatibility aliases for non-timestamped PRDs', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    await writeFile(
+      join(plansDir, 'prd-alpha.md'),
+      '# Alpha\n\nLaunch via omx ralph "Execute alpha"\n',
+    );
+    await writeFile(join(plansDir, 'test-spec-alpha.md'), '# Alpha Test Spec\n');
+    await writeFile(join(plansDir, 'testspec-alpha.md'), '# Alpha Compatibility Test Spec\n');
+    await writeFile(join(plansDir, 'test-spec-20260427T153100Z-alpha.md'), '# Alpha Timestamped Test Spec\n');
+
+    const selection = readLatestPlanningArtifacts(tempDir);
+    assert.equal(selection.prdPath, join(plansDir, 'prd-alpha.md'));
+    assert.deepEqual(selection.testSpecPaths, [
+      join(plansDir, 'test-spec-alpha.md'),
+      join(plansDir, 'testspec-alpha.md'),
+    ]);
+
+    const hint = readApprovedExecutionLaunchHint(tempDir, 'ralph');
+    assert.ok(hint);
+    assert.deepEqual(hint?.testSpecPaths, [
+      join(plansDir, 'test-spec-alpha.md'),
+      join(plansDir, 'testspec-alpha.md'),
+    ]);
+  });
+
+  it('fails closed for timestamped PRDs when only legacy slug test specs exist', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    await writeFile(
+      join(plansDir, 'prd-20260427T153100Z-alpha.md'),
+      '# Alpha\n\nLaunch via omx ralph "Execute alpha"\n',
+    );
+    await writeFile(join(plansDir, 'test-spec-alpha.md'), '# Alpha Legacy Test Spec\n');
+
+    const artifacts = readPlanningArtifacts(tempDir);
+    assert.equal(isPlanningComplete(artifacts), false);
+
+    const selection = readLatestPlanningArtifacts(tempDir);
+    assert.equal(selection.prdPath, join(plansDir, 'prd-20260427T153100Z-alpha.md'));
+    assert.deepEqual(selection.testSpecPaths, []);
+
+    assert.equal(readApprovedExecutionLaunchHint(tempDir, 'ralph'), null);
+
+    const resolution = readTeamDagArtifactResolution(tempDir);
+    assert.equal(resolution.source, 'none');
+    assert.equal(resolution.prdPath, join(plansDir, 'prd-20260427T153100Z-alpha.md'));
+    assert.equal(resolution.planSlug, '20260427T153100Z-alpha');
     assert.deepEqual(resolution.warnings, ['missing_matching_test_spec']);
   });
 
@@ -405,6 +507,30 @@ describe('planning artifacts', () => {
     assert.ok(hint.repositoryContextSummary.content.split('\n').length <= 80);
   });
 
+  it('prefers exact timestamped repository context sidecars for timestamped PRDs', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    await writeFile(
+      join(plansDir, 'prd-20260427T153100Z-alpha.md'),
+      '# Alpha\n\nLaunch via omx team 2:executor "Execute alpha"\n',
+    );
+    await writeFile(join(plansDir, 'test-spec-20260427T153100Z-alpha.md'), '# Alpha Test Spec\n');
+    await writeFile(join(plansDir, 'repo-context-alpha.md'), 'stale alpha context\n');
+    await writeFile(
+      join(plansDir, 'repo-context-20260427T153100Z-alpha.md'),
+      'fresh alpha context\n',
+    );
+
+    const hint = readApprovedExecutionLaunchHint(tempDir, 'team');
+
+    assert.ok(hint?.repositoryContextSummary);
+    assert.equal(
+      hint.repositoryContextSummary.sourcePath,
+      join(plansDir, 'repo-context-20260427T153100Z-alpha.md'),
+    );
+    assert.equal(hint.repositoryContextSummary.content, 'fresh alpha context');
+  });
+
   it('does not attach stale repository context from a different PRD slug', async () => {
     const plansDir = join(tempDir, '.omx', 'plans');
     await mkdir(plansDir, { recursive: true });
@@ -468,6 +594,29 @@ describe('planning artifacts', () => {
     assert.equal(result.source, 'sidecar');
     assert.equal(result.planSlug, 'alpha');
     assert.equal(result.dag?.nodes[0]?.id, 'impl');
+  });
+
+  it('prefers exact timestamped Team DAG sidecars for timestamped PRDs', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    await writeFile(join(plansDir, 'prd-20260427T153100Z-alpha.md'), '# Alpha\n');
+    await writeFile(join(plansDir, 'test-spec-20260427T153100Z-alpha.md'), '# Alpha Test\n');
+    await writeFile(join(plansDir, 'team-dag-alpha.json'), '{"source":"stale"}\n');
+    await writeFile(
+      join(plansDir, 'team-dag-20260427T153100Z-alpha.json'),
+      '{"source":"fresh"}\n',
+    );
+
+    const resolution = readTeamDagArtifactResolution(tempDir);
+
+    assert.equal(resolution.source, 'json-sidecar');
+    assert.equal(resolution.planSlug, '20260427T153100Z-alpha');
+    assert.equal(
+      resolution.artifactPath,
+      join(plansDir, 'team-dag-20260427T153100Z-alpha.json'),
+    );
+    assert.equal(resolution.content, '{"source":"fresh"}\n');
+    assert.deepEqual(resolution.warnings, []);
   });
 
   it('does not overmatch sidecars for a different slug prefix', async () => {
